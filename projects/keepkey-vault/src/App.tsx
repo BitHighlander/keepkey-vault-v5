@@ -328,6 +328,29 @@ function App() {
           setTimeout(() => setHasCopied(false), 2000);
         };
 
+        // Test kkapi protocol
+        const [kkapiTestResult, setKkapiTestResult] = useState<string>("");
+        const [kkapiTesting, setKkapiTesting] = useState(false);
+        
+        const testKkapiProtocol = async () => {
+            setKkapiTesting(true);
+            try {
+                // Test the Tauri command first
+                const tauri_result = await invoke('test_kkapi_protocol') as string;
+                console.log('✅ Tauri kkapi test:', tauri_result);
+                
+                // Test actual kkapi:// fetch
+                const response = await fetch('kkapi://info');
+                const data = await response.text();
+                setKkapiTestResult(`✅ kkapi:// protocol working! Response: ${data.substring(0, 100)}...`);
+            } catch (error) {
+                console.error('❌ kkapi test failed:', error);
+                setKkapiTestResult(`❌ kkapi test failed: ${error}`);
+            } finally {
+                setKkapiTesting(false);
+            }
+        };
+
         // Show the main vault interface ONLY when device is ready AND updates are complete
         console.log('📱 [App] Checking if should show VaultInterface:', {
             loadingStatus,
@@ -405,6 +428,40 @@ function App() {
 
               {/* Settings button in bottom left */}
               <SettingsButton onClick={() => setIsSettingsOpen(true)} />
+
+              {/* kkapi protocol test button in bottom right */}
+              <Box
+                position="absolute"
+                bottom="20px"
+                right="20px"
+                background="rgba(0, 0, 0, 0.7)"
+                borderRadius="md"
+                boxShadow="md"
+                padding={3}
+                border="1px solid rgba(100, 255, 100, 0.3)"
+              >
+                <Flex direction="column" gap={2} align="center">
+                  <Button
+                    size="sm"
+                    colorScheme="blue"
+                    onClick={testKkapiProtocol}
+                    loading={kkapiTesting}
+                    loadingText="Testing..."
+                  >
+                    Test kkapi:// Protocol
+                  </Button>
+                  {kkapiTestResult && (
+                    <Text 
+                      fontSize="xs" 
+                      color={kkapiTestResult.includes('✅') ? "green.300" : "red.300"}
+                      textAlign="center"
+                      maxW="300px"
+                    >
+                      {kkapiTestResult}
+                    </Text>
+                  )}
+                </Flex>
+              </Box>
 
               {/* Settings dialog */}
               <SettingsDialog 

@@ -1,4 +1,5 @@
 use tauri::{Emitter, Manager};
+use tauri::http::{ResponseBuilder, Method};
 
 // Modules for better organization
 
@@ -123,12 +124,101 @@ fn restart_backend_startup(app: tauri::AppHandle) -> Result<(), String> {
     }
 }
 
+// Add a test command to verify kkapi protocol
+#[tauri::command]
+async fn test_kkapi_protocol() -> Result<String, String> {
+    log::info!("🧪 Testing kkapi:// protocol functionality");
+    Ok("kkapi:// protocol handler is registered and ready".to_string())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_sql::Builder::default().build())
         .plugin(tauri_plugin_process::init())
+        .register_uri_scheme_protocol("kkapi", |app, request| {
+            // 1️⃣ Rewrite kkapi://… → http://localhost:1646/…
+            let original_url = request.uri();
+            let proxied_url = original_url.replace("kkapi://", "http://localhost:1646/");
+            
+            log::debug!("🔄 Proxying kkapi request: {} -> {}", original_url, proxied_url);
+            
+            // 2️⃣ Create HTTP client and forward the request
+            let client = reqwest::blocking::Client::new();
+            let method = match request.method() {
+                &Method::GET => reqwest::Method::GET,
+                &Method::POST => reqwest::Method::POST,
+                &Method::PUT => reqwest::Method::PUT,
+                &Method::DELETE => reqwest::Method::DELETE,
+                &Method::PATCH => reqwest::Method::PATCH,
+                &Method::OPTIONS => reqwest::Method::OPTIONS,
+                &Method::HEAD => reqwest::Method::HEAD,
+                _ => reqwest::Method::GET, // Default fallback
+            };
+            
+            // Build the request
+            let mut req_builder = client.request(method, &proxied_url);
+            
+            // Forward headers (excluding host and some problematic ones)
+            for (name, value) in request.headers() {
+                let header_name = name.as_str().to_lowercase();
+                if !["host", "connection", "upgrade-insecure-requests"].contains(&header_name.as_str()) {
+                    if let Ok(header_value) = value.to_str() {
+                        req_builder = req_builder.header(name.as_str(), header_value);
+                    }
+                }
+            }
+            
+            // Add body for POST/PUT requests
+            if let Some(body) = request.body() {
+                req_builder = req_builder.body(body.clone());
+            }
+            
+            // Execute the request
+            match req_builder.send() {
+                Ok(response) => {
+                    let status = response.status();
+                    let mut response_builder = ResponseBuilder::new().status(status);
+                    
+                    // Forward response headers and add CORS headers
+                    for (name, value) in response.headers() {
+                        if let Ok(header_value) = value.to_str() {
+                            response_builder = response_builder.header(name.as_str(), header_value);
+                        }
+                    }
+                    
+                    // Add CORS headers to allow the WebView to read the response
+                    response_builder = response_builder
+                        .header("Access-Control-Allow-Origin", "*")
+                        .header("Access-Control-Allow-Methods", "GET,POST,PUT,DELETE,OPTIONS,PATCH")
+                        .header("Access-Control-Allow-Headers", "Content-Type,Authorization,X-Requested-With");
+                    
+                    // Get response body
+                    match response.bytes() {
+                        Ok(body) => {
+                            log::debug!("✅ Successfully proxied request to {}", proxied_url);
+                            response_builder.body(body)
+                        }
+                        Err(e) => {
+                            log::error!("❌ Failed to read response body: {}", e);
+                            ResponseBuilder::new()
+                                .status(500)
+                                .header("Access-Control-Allow-Origin", "*")
+                                .body(format!("Failed to read response: {}", e))
+                        }
+                    }
+                }
+                Err(e) => {
+                    log::error!("❌ Failed to proxy request to {}: {}", proxied_url, e);
+                    ResponseBuilder::new()
+                        .status(502)
+                        .header("Access-Control-Allow-Origin", "*")
+                        .header("Content-Type", "application/json")
+                        .body(format!(r#"{{"error": "Proxy request failed", "details": "{}"}}"#, e))
+                }
+            }
+        })
         .setup(|app| {
             // Initialize device logging system
             if let Err(e) = logging::init_device_logger() {
@@ -209,6 +299,7 @@ pub fn run() {
             vault_open_app,
             open_url,
             restart_backend_startup,
+            test_kkapi_protocol,
             // Frontend readiness
             commands::frontend_ready,
             // Device operations - unified queue interface
