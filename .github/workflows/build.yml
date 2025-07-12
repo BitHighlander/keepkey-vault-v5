@@ -7,6 +7,12 @@ on:
     branches: [ main, master ]
   workflow_dispatch:
 
+# Add permissions for GitHub Actions to create releases
+permissions:
+  contents: write
+  packages: write
+  pull-requests: read
+
 jobs:
   build:
     strategy:
@@ -119,9 +125,25 @@ jobs:
         projectPath: ./projects/keepkey-vault
         tagName: v__VERSION__ # the action automatically replaces __VERSION__ with the app version
         releaseName: 'KeepKey Vault v__VERSION__'
-        releaseBody: 'See the assets to download this version and install.'
+        releaseBody: |
+          ## KeepKey Vault v__VERSION__
+          
+          ### 🚀 Features
+          - Institutional-grade self-custody solution
+          - Multi-user governance and approval workflows
+          - Advanced security features with hardware wallet integration
+          - Enterprise API for programmatic access
+          
+          ### 📦 Downloads
+          - **macOS**: Download the `.dmg` file below
+          - **Windows**: Download the `.msi` installer
+          - **Linux**: Download the `.AppImage` or `.deb` package
+          
+          ### 🔒 Security
+          All releases are signed and verified. Please verify signatures before installation.
         releaseDraft: true
         prerelease: false
+        includeUpdaterJson: true
 
     - name: Upload artifacts
       uses: actions/upload-artifact@v4
