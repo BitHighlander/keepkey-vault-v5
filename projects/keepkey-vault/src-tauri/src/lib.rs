@@ -1,5 +1,5 @@
 use tauri::{Emitter, Manager};
-use tauri::http::{ResponseBuilder, Method};
+use tauri::http::{Response, Method, StatusCode};
 
 // Modules for better organization
 
@@ -137,9 +137,9 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_sql::Builder::default().build())
         .plugin(tauri_plugin_process::init())
-        .register_uri_scheme_protocol("kkapi", |app, request| {
+        .register_uri_scheme_protocol("kkapi", |_app, request| {
             // 1️⃣ Rewrite kkapi://… → http://localhost:1646/…
-            let original_url = request.uri();
+            let original_url = request.uri().to_string();
             let proxied_url = original_url.replace("kkapi://", "http://localhost:1646/");
             
             log::debug!("🔄 Proxying kkapi request: {} -> {}", original_url, proxied_url);
@@ -171,7 +171,8 @@ pub fn run() {
             }
             
             // Add body for POST/PUT requests
-            if let Some(body) = request.body() {
+            let body = request.body();
+            if !body.is_empty() {
                 req_builder = req_builder.body(body.clone());
             }
             
@@ -179,43 +180,39 @@ pub fn run() {
             match req_builder.send() {
                 Ok(response) => {
                     let status = response.status();
-                    let mut response_builder = ResponseBuilder::new().status(status);
+                    let status_code = StatusCode::from_u16(status.as_u16()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
                     
-                    // Forward response headers and add CORS headers
-                    for (name, value) in response.headers() {
-                        if let Ok(header_value) = value.to_str() {
-                            response_builder = response_builder.header(name.as_str(), header_value);
+                    // Get response body first
+                    let body_bytes = match response.bytes() {
+                        Ok(body) => body,
+                        Err(e) => {
+                            log::error!("❌ Failed to read response body: {}", e);
+                            return Response::builder()
+                                .status(StatusCode::INTERNAL_SERVER_ERROR)
+                                .header("Access-Control-Allow-Origin", "*")
+                                .body(format!("Failed to read response: {}", e).into_bytes())
+                                .unwrap();
                         }
-                    }
+                    };
                     
-                    // Add CORS headers to allow the WebView to read the response
-                    response_builder = response_builder
+                    // Build response with CORS headers
+                    let mut response_builder = Response::builder()
+                        .status(status_code)
                         .header("Access-Control-Allow-Origin", "*")
                         .header("Access-Control-Allow-Methods", "GET,POST,PUT,DELETE,OPTIONS,PATCH")
                         .header("Access-Control-Allow-Headers", "Content-Type,Authorization,X-Requested-With");
                     
-                    // Get response body
-                    match response.bytes() {
-                        Ok(body) => {
-                            log::debug!("✅ Successfully proxied request to {}", proxied_url);
-                            response_builder.body(body)
-                        }
-                        Err(e) => {
-                            log::error!("❌ Failed to read response body: {}", e);
-                            ResponseBuilder::new()
-                                .status(500)
-                                .header("Access-Control-Allow-Origin", "*")
-                                .body(format!("Failed to read response: {}", e))
-                        }
-                    }
+                    log::debug!("✅ Successfully proxied request to {}", proxied_url);
+                    response_builder.body(body_bytes.to_vec()).unwrap()
                 }
                 Err(e) => {
                     log::error!("❌ Failed to proxy request to {}: {}", proxied_url, e);
-                    ResponseBuilder::new()
-                        .status(502)
+                    Response::builder()
+                        .status(StatusCode::BAD_GATEWAY)
                         .header("Access-Control-Allow-Origin", "*")
                         .header("Content-Type", "application/json")
-                        .body(format!(r#"{{"error": "Proxy request failed", "details": "{}"}}"#, e))
+                        .body(format!(r#"{{"error": "Proxy request failed", "details": "{}"}}"#, e).into_bytes())
+                        .unwrap()
                 }
             }
         })
