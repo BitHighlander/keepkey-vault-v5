@@ -2,6 +2,7 @@ pub mod routes;
 pub mod context;
 pub mod auth;
 pub mod api;
+pub mod proxy;
 
 use axum::{
     Router,
@@ -203,15 +204,28 @@ pub async fn start_server(device_queue_manager: crate::commands::DeviceQueueMana
     let addr = "127.0.0.1:1646";
     let listener = TcpListener::bind(addr).await?;
     
-    info!("🚀 Server started successfully:");
+    // Start the proxy server on port 8080
+    let proxy_addr = "127.0.0.1:8080";
+    let proxy_app = proxy::create_proxy_router();
+    let proxy_listener = TcpListener::bind(proxy_addr).await?;
+    
+    info!("🚀 Servers started successfully:");
     info!("  📋 REST API: http://{}/api", addr);
     info!("  📚 API Documentation: http://{}/docs", addr);
     info!("  🔌 Device Management: http://{}/api/devices", addr);
     info!("  🤖 MCP Endpoint: http://{}/mcp", addr);
     info!("  🔐 Authentication: http://{}/auth/pair", addr);
     info!("  🌐 Address Generation: http://{}/address/*", addr);
+    info!("  🌍 Vault Proxy: http://{} -> vault.keepkey.com", proxy_addr);
     
-    // Spawn the server
+    // Spawn the proxy server in the background
+    tokio::spawn(async move {
+        if let Err(e) = serve(proxy_listener, proxy_app).await {
+            log::error!("Proxy server error: {}", e);
+        }
+    });
+    
+    // Run the main API server
     serve(listener, app).await?;
     
     Ok(())
