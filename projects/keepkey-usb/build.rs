@@ -1,8 +1,35 @@
 use std::path::PathBuf;
+use std::env;
 
 fn main() -> std::io::Result<()> {
-    // Use the protocol definitions from the device-protocol directory.
-    let proto_dir: PathBuf = ["..", "..", "..", "device-protocol"].iter().collect();
+    // Get the current directory and build the absolute path to device-protocol
+    let current_dir = env::current_dir()?;
+    let vault_root = current_dir.parent().unwrap().parent().unwrap();
+    let proto_dir = vault_root.join("device-protocol");
+    
+    // Verify the protocol directory exists
+    if !proto_dir.exists() {
+        eprintln!("ERROR: Protocol directory does not exist: {:?}", proto_dir);
+        eprintln!("Current dir: {:?}", current_dir);
+        eprintln!("Vault root: {:?}", vault_root);
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            format!("Protocol directory not found: {:?}", proto_dir)
+        ));
+    }
+    
+    // Verify types.proto exists
+    let types_proto = proto_dir.join("types.proto");
+    if !types_proto.exists() {
+        eprintln!("ERROR: types.proto does not exist: {:?}", types_proto);
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            format!("types.proto not found: {:?}", types_proto)
+        ));
+    }
+    
+    println!("cargo:warning=Using protocol directory: {:?}", proto_dir);
+    println!("cargo:warning=types.proto found at: {:?}", types_proto);
 
     // Set protoc environment variables for vendored protoc
     std::env::set_var("PROTOC", protoc_bin_vendored::protoc_bin_path().unwrap());

@@ -12,23 +12,55 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        platform: [macos-latest, ubuntu-22.04, windows-latest]
+        include:
+          - platform: macos-latest
+            runner: macos-latest-large  # 4-core runner
+          - platform: ubuntu-22.04
+            runner: ubuntu-latest-8-cores  # 8-core runner
+          - platform: windows-latest
+            runner: windows-latest-8-cores  # 8-core runner
 
-    runs-on: ${{ matrix.platform }}
+    runs-on: ${{ matrix.runner }}
     
     steps:
     - name: Checkout repository
       uses: actions/checkout@v4
       with:
         submodules: recursive
+        fetch-depth: 0  # Full history for better submodule handling
 
-    - name: Log build information
+    - name: Log system information
       run: |
         echo "🚀 Building KeepKey Vault v5"
         echo "📦 Platform: ${{ matrix.platform }}"
+        echo "🏃 Runner: ${{ matrix.runner }}"
         echo "🔧 Node version: 20"
         echo "🦀 Rust: stable"
         echo "📁 Working directory: $(pwd)"
+        echo "💾 Available disk space:"
+        df -h
+        echo "🧠 Memory info:"
+        if [[ "${{ matrix.platform }}" == "ubuntu-22.04" ]]; then
+          free -h
+          nproc
+        elif [[ "${{ matrix.platform }}" == "macos-latest" ]]; then
+          sysctl -n hw.memsize | awk '{print $1/1024/1024/1024 " GB"}'
+          sysctl -n hw.ncpu
+        fi
+
+    - name: Verify submodules
+      run: |
+        echo "📋 Checking submodule status..."
+        git submodule status
+        echo "📁 Checking device-protocol directory..."
+        ls -la device-protocol/ || echo "⚠️ device-protocol directory not found"
+        if [ -f "device-protocol/types.proto" ]; then
+          echo "✅ types.proto found"
+        else
+          echo "❌ types.proto NOT found"
+          echo "📁 Contents of device-protocol:"
+          ls -la device-protocol/ || echo "Directory doesn't exist"
+        fi
 
     - name: Install dependencies (Ubuntu only)
       if: matrix.platform == 'ubuntu-22.04'
@@ -43,11 +75,14 @@ jobs:
 
     - name: Install Rust
       uses: dtolnay/rust-toolchain@stable
+      with:
+        components: rustfmt, clippy
 
     - name: Rust cache
       uses: swatinem/rust-cache@v2
       with:
         workspaces: './projects/keepkey-vault/src-tauri -> target'
+        cache-on-failure: true
 
     - name: Install Bun
       uses: oven-sh/setup-bun@v2
@@ -61,10 +96,25 @@ jobs:
         echo "📦 Installing dependencies..."
         bun install
 
+    - name: Debug build environment
+      working-directory: ./projects/keepkey-usb
+      run: |
+        echo "🔍 Debugging build environment..."
+        echo "📁 Current directory: $(pwd)"
+        echo "📁 Parent directories:"
+        ls -la ../
+        ls -la ../../
+        ls -la ../../../
+        echo "📁 Looking for device-protocol:"
+        find ../../../ -name "device-protocol" -type d || echo "Not found"
+        echo "📁 Looking for types.proto:"
+        find ../../../ -name "types.proto" || echo "Not found"
+
     - name: Build the app
       uses: tauri-apps/tauri-action@v0
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        RUST_BACKTRACE: 1  # Enable Rust backtraces for better error messages
       with:
         projectPath: ./projects/keepkey-vault
         tagName: v__VERSION__ # the action automatically replaces __VERSION__ with the app version
@@ -75,8 +125,18 @@ jobs:
 
     - name: Upload artifacts
       uses: actions/upload-artifact@v4
+      if: always()  # Upload even if build fails for debugging
       with:
         name: ${{ matrix.platform }}-artifacts
         path: |
           projects/keepkey-vault/src-tauri/target/release/bundle/
-        retention-days: 7 
+        retention-days: 7
+
+    - name: Upload build logs
+      uses: actions/upload-artifact@v4
+      if: failure()  # Upload logs only on failure
+      with:
+        name: ${{ matrix.platform }}-build-logs
+        path: |
+          projects/keepkey-vault/src-tauri/target/release/build/
+        retention-days: 3 
