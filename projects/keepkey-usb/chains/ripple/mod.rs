@@ -1,0 +1,1 @@
+//! ripple chain support stub

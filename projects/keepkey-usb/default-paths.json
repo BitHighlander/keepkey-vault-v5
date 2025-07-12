@@ -1,0 +1,91 @@
+{
+  "version": "1.0.0",
+  "description": "Comprehensive KeepKey default derivation paths for bitcoin",
+  "generated": "2025-01-09",
+  "source": "Based on KeepKey firmware coins.def, pioneer-coins paths.ts, and hdwallet-keepkey supportedCoins",
+  "paths": [
+    {
+      "id": "bitcoin_legacy_account_0",
+      "note": "Bitcoin account 0 legacy (p2pkh)",
+      "blockchain": "bitcoin",
+      "symbol": "BTC",
+      "symbol_swap_kit": "BTC",
+      "networks": ["bip122:000000000019d6689c085ae165831e93"],
+      "script_type": "p2pkh",
+      "available_script_types": ["p2pkh", "p2sh-p2wpkh", "p2wpkh"],
+      "type": "xpub",
+      "addressNList": [2147483692, 2147483648, 2147483648],
+      "addressNListMaster": [2147483692, 2147483648, 2147483648, 0, 0],
+      "curve": "secp256k1",
+      "showDisplay": false
+    },
+    {
+      "id": "bitcoin_segwit_p2sh_account_0",
+      "note": "Bitcoin account 0 segwit (p2sh-p2wpkh) BIP49",
+      "blockchain": "bitcoin",
+      "symbol": "BTC",
+      "symbol_swap_kit": "BTC",
+      "networks": ["bip122:000000000019d6689c085ae165831e93"],
+      "script_type": "p2sh-p2wpkh",
+      "available_script_types": ["p2pkh", "p2sh-p2wpkh", "p2wpkh"],
+      "type": "ypub",
+      "addressNList": [2147483697, 2147483648, 2147483648],
+      "addressNListMaster": [2147483697, 2147483648, 2147483648, 0, 0],
+      "curve": "secp256k1",
+      "showDisplay": false
+    },
+    {
+      "id": "bitcoin_native_segwit_account_0",
+      "note": "Bitcoin account 0 Native Segwit (Bech32) BIP84",
+      "blockchain": "bitcoin",
+      "symbol": "BTC",
+      "symbol_swap_kit": "BTC",
+      "networks": ["bip122:000000000019d6689c085ae165831e93"],
+      "script_type": "p2wpkh",
+      "available_script_types": ["p2pkh", "p2sh-p2wpkh", "p2wpkh"],
+      "type": "zpub",
+      "addressNList": [2147483732, 2147483648, 2147483648],
+      "addressNListMaster": [2147483732, 2147483648, 2147483648, 0, 0],
+      "curve": "secp256k1",
+      "showDisplay": false
+    },
+    {
+      "id": "bitcoin_testnet_account_0",
+      "note": "Bitcoin Testnet account 0",
+      "blockchain": "bitcoin",
+      "symbol": "TEST",
+      "symbol_swap_kit": "TEST",
+      "networks": ["bip122:000000000933ea01ad0ee984209779ba"],
+      "script_type": "p2pkh",
+      "available_script_types": ["p2pkh", "p2sh-p2wpkh", "p2wpkh"],
+      "type": "tpub",
+      "addressNList": [2147483649, 2147483648, 2147483648],
+      "addressNListMaster": [2147483649, 2147483648, 2147483648],
+      "curve": "secp256k1",
+      "showDisplay": false
+    }
+  ],
+  "slip44_coin_types": {
+    "0": "Bitcoin",
+    "1": "Bitcoin Testnet"
+  },
+  "script_types": {
+    "p2pkh": "Pay to Public Key Hash (Legacy)",
+    "p2sh": "Pay to Script Hash",
+    "p2wpkh": "Pay to Witness Public Key Hash (Native SegWit)",
+    "p2sh-p2wpkh": "Pay to Script Hash - Pay to Witness Public Key Hash (Nested SegWit)"
+  },
+  "metadata": {
+    "total_paths": 18,
+    "supported_blockchains": [
+      "bitcoin"
+    ],
+    "notes": [
+      "All addressNList values use hardened derivation (0x80000000 + value)",
+      "Default account is always 0 unless specified otherwise",
+      "Script types indicate the address format used",
+      "Networks use CAIP-2 standard identifiers",
+      "Purpose field indicates BIP standard used (44, 49, 84)"
+    ]
+  }
+} 

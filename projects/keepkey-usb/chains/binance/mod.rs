@@ -1,0 +1,1 @@
+//! binance chain support stub

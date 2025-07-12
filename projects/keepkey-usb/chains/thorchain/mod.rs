@@ -1,0 +1,1 @@
+//! thorchain chain support stub

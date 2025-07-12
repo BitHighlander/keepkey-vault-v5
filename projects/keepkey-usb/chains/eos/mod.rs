@@ -1,0 +1,1 @@
+//! eos chain support stub

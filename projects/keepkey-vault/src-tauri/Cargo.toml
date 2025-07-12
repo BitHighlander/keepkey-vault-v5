@@ -1,0 +1,53 @@
+[package]
+name = "vault-v2"
+version = "0.1.0"
+description = "A Tauri App"
+authors = ["you"]
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[lib]
+# The `_lib` suffix may seem redundant but it is necessary
+# to make the lib name unique and wouldn't conflict with the bin name.
+# This seems to be only an issue on Windows, see https://github.com/rust-lang/cargo/issues/8519
+name = "vault_v2_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+lazy_static = "1.4"
+base58 = "0.2"
+sha2 = "0.10"
+keepkey_rust = { path = "../../keepkey-usb" }
+tauri = { version = "2", features = [] }
+tauri-plugin-opener = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+rusqlite = { version = "0.31", features = ["bundled"] }
+tauri-plugin-sql = { version = "2", features = ["sqlite"] }
+tokio = { version = "1", features = ["full"] }
+tokio-util = "0.7"  # For cancellation tokens and proper shutdown handling
+uuid = { version = "1.0", features = ["v4"] }
+hex = "0.4"  # Needed for hash encoding in application layer
+chrono = { version = "0.4", features = ["serde"] }  # For timestamp logging
+dirs = "5.0"  # For finding home directory
+anyhow = "1.0"  # For error handling in cache module
+semver = "1.0.26"
+log = "0.4"  # For logging support in PIN creation
+# Server dependencies
+axum = "0.7"
+tower = "0.4"
+tower-http = { version = "0.5", features = ["cors"] }
+tracing = "0.1"
+tracing-subscriber = "0.3"
+# OpenAPI generation + UI
+utoipa = "4"
+utoipa-axum = "0.2.0"
+utoipa-swagger-ui = { version = "5", features = ["axum", "debug-embed"] }
+once_cell = "1.18.0"
+tauri-plugin-process = "2"
+# Note: rusb removed - handled internally by keepkey-rust
+
