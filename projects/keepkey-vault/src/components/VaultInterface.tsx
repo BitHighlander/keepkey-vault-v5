@@ -66,16 +66,16 @@ export const VaultInterface = () => {
   };
 
   const navItems: NavItem[] = [
+    // {
+    //   id: 'vault',
+    //   label: 'Vault',
+    //   icon: <FaWallet />,
+    //   onClick: () => handleViewChange('vault'),
+    // },
     {
       id: 'vault',
       label: 'Vault',
       icon: <FaWallet />,
-      onClick: () => handleViewChange('vault'),
-    },
-    {
-      id: 'browser',
-      label: 'Browser',
-      icon: <FaGlobe />,
       onClick: () => handleViewChange('browser'),
     },
     {

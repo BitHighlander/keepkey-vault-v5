@@ -43,6 +43,14 @@
     ],
     "resources": [
       "firmware/"
-    ]
+    ],
+    "updater": {
+      "active": true,
+      "endpoints": [
+        "https://github.com/keepkey/keepkey-vault-v5/releases/latest/download/latest.json"
+      ],
+      "dialog": true,
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDFCMTVCQzc0Mzc4MkVFNjUKUldSbDdvSTNkTHdWRzI5NkhtRUF5NmZ0c3NhaVRkM1pWbGw2cXJVMFhvWHFialNqWEtaY1pXcEwK"
+    }
   }
 }

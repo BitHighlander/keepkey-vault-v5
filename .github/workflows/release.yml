@@ -53,6 +53,29 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Check signing credentials
+        id: check-signing
+        run: |
+          echo "🔍 Checking for signing credentials..."
+          
+          if [ -n "${{ secrets.TAURI_PRIVATE_KEY }}" ]; then
+            echo "✅ TAURI_PRIVATE_KEY is set"
+            echo "has_signing_key=true" >> $GITHUB_OUTPUT
+          else
+            echo "⚠️  TAURI_PRIVATE_KEY is NOT set - will build without signing"
+            echo "has_signing_key=false" >> $GITHUB_OUTPUT
+          fi
+          
+          if [ -n "${{ secrets.TAURI_KEY_PASSWORD }}" ]; then
+            echo "✅ TAURI_KEY_PASSWORD is set"
+          else
+            echo "⚠️  TAURI_KEY_PASSWORD is NOT set"
+          fi
+          
+          echo "📝 To enable signing, add these secrets to your repository:"
+          echo "   - TAURI_PRIVATE_KEY: base64-encoded signing key"
+          echo "   - TAURI_KEY_PASSWORD: password for the signing key"
+
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
@@ -81,15 +104,8 @@ jobs:
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          ENABLE_CODE_SIGNING: ${{ secrets.APPLE_CERTIFICATE }}
-          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-          TAURI_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
-          TAURI_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ steps.check-signing.outputs.has_signing_key == 'true' && secrets.TAURI_PRIVATE_KEY || '' }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ steps.check-signing.outputs.has_signing_key == 'true' && secrets.TAURI_KEY_PASSWORD || '' }}
         with:
           projectPath: ./projects/keepkey-vault
           releaseId: ${{ needs.create-release.outputs.release_id }}

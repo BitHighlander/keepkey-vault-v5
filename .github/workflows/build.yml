@@ -20,6 +20,14 @@ jobs:
     - name: Checkout repository
       uses: actions/checkout@v4
 
+    - name: Log build information
+      run: |
+        echo "🚀 Building KeepKey Vault v5"
+        echo "📦 Platform: ${{ matrix.platform }}"
+        echo "🔧 Node version: 20"
+        echo "🦀 Rust: stable"
+        echo "📁 Working directory: $(pwd)"
+
     - name: Install dependencies (Ubuntu only)
       if: matrix.platform == 'ubuntu-22.04'
       run: |
@@ -46,7 +54,10 @@ jobs:
 
     - name: Install frontend dependencies
       working-directory: ./projects/keepkey-vault
-      run: bun install
+      run: |
+        echo "📁 Current directory: $(pwd)"
+        echo "📦 Installing dependencies..."
+        bun install
 
     - name: Build the app
       uses: tauri-apps/tauri-action@v0
