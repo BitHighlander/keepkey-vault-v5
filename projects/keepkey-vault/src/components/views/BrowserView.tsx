@@ -14,8 +14,8 @@ import { listen } from '@tauri-apps/api/event';
 import { invoke } from '@tauri-apps/api/core';
 
 export const BrowserView = () => {
-  const [url, setUrl] = useState('https://vault.keepkey.com');
-  const [inputUrl, setInputUrl] = useState('https://vault.keepkey.com');
+  const [url, setUrl] = useState('http://localhost:8080');
+  const [inputUrl, setInputUrl] = useState('vault.keepkey.com');
   const [isLoading, setIsLoading] = useState(true);
   const [canGoBack, setCanGoBack] = useState(false);
   const [canGoForward, setCanGoForward] = useState(false);
@@ -25,27 +25,25 @@ export const BrowserView = () => {
   const handleNavigate = async () => {
     if (!inputUrl) return;
     
-    // Simple URL validation and formatting
-    let formattedUrl = inputUrl;
-    if (!inputUrl.startsWith('http://') && !inputUrl.startsWith('https://')) {
-      formattedUrl = `https://${inputUrl}`;
-    }
+    // For now, always use the proxy for vault.keepkey.com
+    const proxyUrl = 'http://localhost:8080';
     
     // Notify backend of URL change
     try {
-      await invoke('browser_navigate', { url: formattedUrl });
+      await invoke('browser_navigate', { url: proxyUrl });
     } catch (error) {
       console.error('Failed to notify backend of navigation:', error);
-      // Still navigate even if backend call fails
-      setUrl(formattedUrl);
-      setInputUrl(formattedUrl);
-      setIsLoading(true);
     }
+    
+    // Update the UI
+    setUrl(proxyUrl);
+    setInputUrl('vault.keepkey.com');
+    setIsLoading(true);
   };
 
   const handleHome = () => {
-    const homeUrl = 'https://vault.keepkey.com';
-    setInputUrl(homeUrl);
+    const homeUrl = 'http://localhost:8080';
+    setInputUrl('vault.keepkey.com');
     setUrl(homeUrl);
     setIsLoading(true);
   };
