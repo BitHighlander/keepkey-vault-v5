@@ -120,7 +120,7 @@ export async function createUnsignedUxtoTx(
     const feeLevel = 5;
     let effectiveFeeRate;
 
-    switch (feeLevel) {
+    switch (feeLevel as number) {
       case 1:
       case 2:
         effectiveFeeRate = feeRateFromNode.slow;
