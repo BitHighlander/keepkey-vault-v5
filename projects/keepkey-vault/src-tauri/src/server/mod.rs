@@ -7,6 +7,7 @@ use axum::{
     Router,
     serve,
     routing::{get, post},
+    response::Json,
 };
 
 use tokio::net::TcpListener;
@@ -129,10 +130,18 @@ pub async fn start_server(device_queue_manager: crate::commands::DeviceQueueMana
     let swagger_ui = SwaggerUi::new("/docs")
         .url("/api-docs/openapi.json", ApiDoc::openapi());
     
+    // Create a handler for the OpenAPI spec that returns the same JSON
+    let openapi_spec = ApiDoc::openapi();
+    
     // Build the router
     let app = Router::new()
         // System endpoints
         .route("/api/health", get(routes::health_check))
+        
+        // Add compatibility route for Pioneer SDK kkapi detection
+        .route("/spec/swagger.json", get(|| async move {
+            Json(ApiDoc::openapi())
+        }))
         
         // Context endpoints - commented out until full device interaction is implemented
         // .route("/api/context", get(routes::api_get_context))
