@@ -16,6 +16,8 @@ jobs:
       release_upload_url: ${{ steps.create-release.outputs.upload_url }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive
       
       - name: Create Release
         id: create-release
@@ -52,6 +54,8 @@ jobs:
     runs-on: ${{ matrix.platform }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive
 
       - name: Check signing credentials
         id: check-signing
