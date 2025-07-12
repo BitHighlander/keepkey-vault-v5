@@ -132,7 +132,7 @@ pub async fn start_server(device_queue_manager: crate::commands::DeviceQueueMana
         .url("/api-docs/openapi.json", ApiDoc::openapi());
     
     // Create a handler for the OpenAPI spec that returns the same JSON
-    let openapi_spec = ApiDoc::openapi();
+    let _openapi_spec = ApiDoc::openapi();
     
     // Build the router
     let app = Router::new()
