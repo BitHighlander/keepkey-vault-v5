@@ -20,11 +20,11 @@ jobs:
       matrix:
         include:
           - platform: macos-latest
-            runner: macos-latest-large  # 4-core runner
+            runner: macos-latest  # Use standard runner for now
           - platform: ubuntu-22.04
-            runner: ubuntu-latest-8-cores  # 8-core runner
+            runner: ubuntu-latest  # Use standard runner for now
           - platform: windows-latest
-            runner: windows-latest-8-cores  # 8-core runner
+            runner: windows-latest  # Use standard runner for now
 
     runs-on: ${{ matrix.runner }}
     
@@ -36,6 +36,7 @@ jobs:
         fetch-depth: 0  # Full history for better submodule handling
 
     - name: Log system information
+      shell: bash
       run: |
         echo "🚀 Building KeepKey Vault v5"
         echo "📦 Platform: ${{ matrix.platform }}"
@@ -44,17 +45,22 @@ jobs:
         echo "🦀 Rust: stable"
         echo "📁 Working directory: $(pwd)"
         echo "💾 Available disk space:"
-        df -h
+        df -h || echo "df command not available"
         echo "🧠 Memory info:"
         if [[ "${{ matrix.platform }}" == "ubuntu-22.04" ]]; then
           free -h
           nproc
         elif [[ "${{ matrix.platform }}" == "macos-latest" ]]; then
-          sysctl -n hw.memsize | awk '{print $1/1024/1024/1024 " GB"}'
-          sysctl -n hw.ncpu
+          sysctl -n hw.memsize | awk '{print $1/1024/1024/1024 " GB"}' || echo "Memory info not available"
+          sysctl -n hw.ncpu || echo "CPU info not available"
+        elif [[ "${{ matrix.platform }}" == "windows-latest" ]]; then
+          echo "Windows system detected"
+          systeminfo | findstr "Total Physical Memory" || echo "Memory info not available"
+          echo "CPU cores: $NUMBER_OF_PROCESSORS"
         fi
 
     - name: Verify submodules
+      shell: bash
       run: |
         echo "📋 Checking submodule status..."
         git submodule status
@@ -72,7 +78,23 @@ jobs:
       if: matrix.platform == 'ubuntu-22.04'
       run: |
         sudo apt-get update
-        sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev
+        sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev patchelf
+
+    - name: Install dependencies (Windows only)
+      if: matrix.platform == 'windows-latest'
+      shell: powershell
+      run: |
+        echo "Installing Windows dependencies..."
+        # Install WebView2 Runtime if needed
+        $webview2Url = "https://go.microsoft.com/fwlink/p/?LinkId=2124703"
+        $webview2Path = "$env:TEMP\MicrosoftEdgeWebview2Setup.exe"
+        try {
+          Invoke-WebRequest -Uri $webview2Url -OutFile $webview2Path -ErrorAction Stop
+          Start-Process -FilePath $webview2Path -ArgumentList "/silent", "/install" -Wait -ErrorAction Stop
+          echo "✅ WebView2 Runtime installed"
+        } catch {
+          echo "⚠️ WebView2 installation failed or already installed: $_"
+        }
 
     - name: Setup Node.js
       uses: actions/setup-node@v4
@@ -97,6 +119,7 @@ jobs:
 
     - name: Install frontend dependencies
       working-directory: ./projects/keepkey-vault
+      shell: bash
       run: |
         echo "📁 Current directory: $(pwd)"
         echo "📦 Installing dependencies..."
@@ -104,6 +127,7 @@ jobs:
 
     - name: Debug build environment
       working-directory: ./projects/keepkey-usb
+      shell: bash
       run: |
         echo "🔍 Debugging build environment..."
         echo "📁 Current directory: $(pwd)"
@@ -112,9 +136,9 @@ jobs:
         ls -la ../../
         ls -la ../../../
         echo "📁 Looking for device-protocol:"
-        find ../../../ -name "device-protocol" -type d || echo "Not found"
+        find ../../../ -name "device-protocol" -type d 2>/dev/null || echo "Not found"
         echo "📁 Looking for types.proto:"
-        find ../../../ -name "types.proto" || echo "Not found"
+        find ../../../ -name "types.proto" 2>/dev/null || echo "Not found"
 
     - name: Build the app
       uses: tauri-apps/tauri-action@v0
