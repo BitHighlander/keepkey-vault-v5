@@ -110,4 +110,4 @@ nuclear-clean.sh
 
 # macOS signing artifacts
 *.provisionprofile
-*.entitlements 
+*.entitlements .env.production
