@@ -20,7 +20,7 @@ This document provides step-by-step instructions for setting up GitHub Actions t
 security find-identity -v -p codesigning | grep "KeepKey"
 
 # Export certificate (replace with your actual certificate name)
-security export -k login.keychain -t identities -f pkcs12 -o keepkey-certificate.p12 "Developer ID Application: KeepKey LLC (DR57X8Z394)"
+security export -k login.keychain -t identities -f pkcs12 -o keepkey-certificate.p12 "Developer ID Application: Matt Hollander (DR57X8Z394)"
 ```
 
 ### 1.2 Encode Certificate to Base64
@@ -101,7 +101,7 @@ Value: [password for the P12 certificate, if any]
 #### Code Signing Identity
 ```
 Name: CODESIGN_IDENTITY
-Value: Developer ID Application: KeepKey LLC (DR57X8Z394)
+Value: Developer ID Application: Matt Hollander (DR57X8Z394)
 ```
 
 #### Keychain Password (Optional)
@@ -130,7 +130,7 @@ Your repository secrets should include:
 security find-identity -v -p codesigning | grep "KeepKey"
 
 # Output should match your CODESIGN_IDENTITY secret exactly
-# Example: "Developer ID Application: KeepKey LLC (DR57X8Z394)"
+# Example: "Developer ID Application: Matt Hollander (DR57X8Z394)"
 ```
 
 ## Step 5: Trigger Build
