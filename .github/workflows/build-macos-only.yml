@@ -135,6 +135,18 @@ jobs:
       run: |
         echo "🔨 Building universal binary..."
         cd ../..
+        
+        # Create .env file for build script (it expects to source .env)
+        if [ -n "$APPLE_ID" ] && [ -n "$APPLE_PASSWORD" ] && [ -n "$APPLE_TEAM_ID" ]; then
+          echo "✅ Creating .env file with Apple credentials for notarization"
+          echo "APPLE_ID=$APPLE_ID" > .env
+          echo "APPLE_PASSWORD=$APPLE_PASSWORD" >> .env
+          echo "APPLE_TEAM_ID=$APPLE_TEAM_ID" >> .env
+        else
+          echo "⚠️ Apple credentials not found - building without notarization"
+          touch .env
+        fi
+        
         chmod +x build.sh
         ./build.sh
 
@@ -188,7 +200,7 @@ jobs:
       with:
         name: macos-universal-build
         path: |
-          projects/keepkey-vault/target/universal-apple-darwin/release/bundle/
+          projects/keepkey-vault/target/release/bundle/
         retention-days: 7
 
     - name: Create GitHub Release
@@ -222,7 +234,7 @@ jobs:
           ### 🔍 Verification
           This release is signed and notarized by Apple. macOS will verify the signature automatically.
         files: |
-          projects/keepkey-vault/target/universal-apple-darwin/release/bundle/dmg/*.dmg
+          projects/keepkey-vault/target/release/bundle/dmg/*.dmg
         draft: false
         prerelease: false
 
@@ -232,5 +244,5 @@ jobs:
       with:
         name: macos-build-logs
         path: |
-          projects/keepkey-vault/target/universal-apple-darwin/release/build/
+          projects/keepkey-vault/target/release/build/
         retention-days: 3 
