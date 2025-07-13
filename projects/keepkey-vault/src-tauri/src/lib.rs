@@ -21,6 +21,42 @@ fn greet(name: &str) -> String {
     format!("Hello, {}! You've been greeted from Rust!", name)
 }
 
+// Dev tools toggle command
+#[tauri::command]
+fn toggle_dev_tools(window: tauri::Window) -> Result<(), String> {
+    #[cfg(debug_assertions)]
+    {
+        if window.is_devtools_open() {
+            window.close_devtools();
+            Ok(())
+        } else {
+            window.open_devtools();
+            Ok(())
+        }
+    }
+    #[cfg(not(debug_assertions))]
+    {
+        // In release mode, only allow if explicitly enabled
+        if std::env::var("KEEPKEY_ENABLE_DEVTOOLS").is_ok() {
+            if window.is_devtools_open() {
+                window.close_devtools();
+                Ok(())
+            } else {
+                window.open_devtools();
+                Ok(())
+            }
+        } else {
+            Err("Dev tools are disabled in release mode".to_string())
+        }
+    }
+}
+
+// Get app version command
+#[tauri::command]
+fn get_app_version() -> String {
+    env!("CARGO_PKG_VERSION").to_string()
+}
+
 // Onboarding related commands moved to commands.rs
 
 
@@ -291,6 +327,8 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             greet,
+            toggle_dev_tools,
+            get_app_version,
             vault_change_view,
             vault_open_support,
             vault_open_app,
