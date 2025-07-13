@@ -1,4 +1,4 @@
-name: Build KeepKey Vault v5 (macOS Only)
+name: Build KeepKey Vault v5 (macOS Universal)
 
 on:
   push:
@@ -7,7 +7,6 @@ on:
     branches: [ main, master ]
   workflow_dispatch:
 
-# Add permissions for GitHub Actions to create releases
 permissions:
   contents: write
   packages: write
@@ -16,15 +15,6 @@ permissions:
 jobs:
   build-macos:
     runs-on: macos-latest
-    strategy:
-      matrix:
-        include:
-          - target: aarch64-apple-darwin
-            arch: arm64
-            name: Apple Silicon
-          - target: x86_64-apple-darwin
-            arch: x64
-            name: Intel
     
     steps:
     - name: Checkout repository
@@ -36,8 +26,8 @@ jobs:
     - name: Log system information
       shell: bash
       run: |
-        echo "🍎 Building KeepKey Vault v5 for macOS (${{ matrix.name }})"
-        echo "🎯 Target: ${{ matrix.target }}"
+        echo "🍎 Building KeepKey Vault v5 for macOS (Universal Binary)"
+        echo "🎯 Target: universal-apple-darwin"
         echo "🏃 Runner: macos-latest"
         echo "🔧 Node version: 20"
         echo "🦀 Rust: stable"
@@ -49,21 +39,6 @@ jobs:
         echo "🖥️ CPU cores:"
         sysctl -n hw.ncpu
 
-    - name: Verify submodules
-      shell: bash
-      run: |
-        echo "📋 Checking submodule status..."
-        git submodule status
-        echo "📁 Checking device-protocol directory..."
-        ls -la device-protocol/ || echo "⚠️ device-protocol directory not found"
-        if [ -f "device-protocol/types.proto" ]; then
-          echo "✅ types.proto found"
-        else
-          echo "❌ types.proto NOT found"
-          echo "📁 Contents of device-protocol:"
-          ls -la device-protocol/ || echo "Directory doesn't exist"
-        fi
-
     - name: Setup Node.js
       uses: actions/setup-node@v4
       with:
@@ -73,7 +48,9 @@ jobs:
       uses: dtolnay/rust-toolchain@stable
       with:
         components: rustfmt, clippy
-        targets: ${{ matrix.target }}
+        targets: |
+          x86_64-apple-darwin
+          aarch64-apple-darwin
 
     - name: Rust cache
       uses: swatinem/rust-cache@v2
@@ -99,107 +76,136 @@ jobs:
       run: |
         echo "🔍 Checking for signing credentials..."
         
-        # Check for Apple Developer credentials
-        if [ -n "${{ secrets.APPLE_CERTIFICATE }}" ] && [ -n "${{ secrets.APPLE_CERTIFICATE_PASSWORD }}" ]; then
-          echo "✅ Apple Developer certificate credentials found"
+        # Check for Apple Developer certificate
+        if [ -n "${{ secrets.MACOS_CERTIFICATE_BASE64 }}" ]; then
+          echo "✅ Apple Developer certificate found"
           echo "has_apple_cert=true" >> $GITHUB_OUTPUT
         else
-          echo "⚠️ Apple Developer certificate credentials NOT found"
+          echo "⚠️ Apple Developer certificate NOT found"
           echo "has_apple_cert=false" >> $GITHUB_OUTPUT
         fi
         
-        # Check for Tauri signing key
-        if [ -n "${{ secrets.TAURI_PRIVATE_KEY }}" ]; then
-          echo "✅ TAURI_PRIVATE_KEY is set"
-          echo "has_tauri_key=true" >> $GITHUB_OUTPUT
-        else
-          echo "⚠️ TAURI_PRIVATE_KEY is NOT set"
-          echo "has_tauri_key=false" >> $GITHUB_OUTPUT
-        fi
-        
         # Check for notarization credentials
-        if [ -n "${{ secrets.APPLE_API_ISSUER }}" ] && [ -n "${{ secrets.APPLE_API_KEY }}" ]; then
-          echo "✅ Apple API credentials for notarization found"
-          echo "has_notarization=true" >> $GITHUB_OUTPUT
-        elif [ -n "${{ secrets.APPLE_ID }}" ] && [ -n "${{ secrets.APPLE_PASSWORD }}" ]; then
-          echo "✅ Apple ID credentials for notarization found"
+        if [ -n "${{ secrets.APPLE_ID }}" ] && [ -n "${{ secrets.APPLE_PASSWORD }}" ] && [ -n "${{ secrets.APPLE_TEAM_ID }}" ]; then
+          echo "✅ Apple notarization credentials found"
           echo "has_notarization=true" >> $GITHUB_OUTPUT
         else
-          echo "⚠️ No notarization credentials found"
+          echo "⚠️ Apple notarization credentials NOT found"
           echo "has_notarization=false" >> $GITHUB_OUTPUT
         fi
 
     - name: Import Apple Developer Certificate
       if: steps.check-signing.outputs.has_apple_cert == 'true'
       env:
-        APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-        APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-        KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+        MACOS_CERTIFICATE_BASE64: ${{ secrets.MACOS_CERTIFICATE_BASE64 }}
+        MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+        KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD || 'temp-keychain-password' }}
       run: |
-        echo "🔐 Importing Apple Developer Certificate..."
+        echo "🔐 Setting up Apple Developer Certificate..."
         
         # Decode certificate
-        echo $APPLE_CERTIFICATE | base64 --decode > certificate.p12
+        echo "$MACOS_CERTIFICATE_BASE64" | base64 --decode > certificate.p12
         
         # Create keychain
         security create-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
-        security default-keychain -s build.keychain
+        security set-keychain-settings -lut 21600 build.keychain
         security unlock-keychain -p "$KEYCHAIN_PASSWORD" build.keychain
-        security set-keychain-settings -t 3600 -u build.keychain
         
         # Import certificate
-        security import certificate.p12 -k build.keychain -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+        security import certificate.p12 -k build.keychain -P "$MACOS_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
         security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" build.keychain
+        security list-keychain -d user -s build.keychain
         
-        # Find and export signing identity
-        CERT_INFO=$(security find-identity -v -p codesigning build.keychain | grep "Developer ID Application" | head -1)
-        if [ -z "$CERT_INFO" ]; then
-          CERT_INFO=$(security find-identity -v -p codesigning build.keychain | grep "Apple Development" | head -1)
+        # Verify certificate was imported
+        security find-identity -v -p codesigning build.keychain
+        
+        # Clean up certificate file
+        rm certificate.p12
+
+    - name: Set up environment variables
+      run: |
+        echo "🔧 Setting up environment variables..."
+        echo "APPLE_ID=${{ secrets.APPLE_ID }}" >> $GITHUB_ENV
+        echo "APPLE_PASSWORD=${{ secrets.APPLE_PASSWORD }}" >> $GITHUB_ENV
+        echo "APPLE_TEAM_ID=${{ secrets.APPLE_TEAM_ID }}" >> $GITHUB_ENV
+        echo "CODESIGN_IDENTITY=${{ secrets.CODESIGN_IDENTITY }}" >> $GITHUB_ENV
+
+    - name: Build universal binary
+      working-directory: ./projects/keepkey-vault
+      run: |
+        echo "🔨 Building universal binary..."
+        cd ../..
+        chmod +x build.sh
+        ./build.sh
+
+    - name: Verify build output
+      shell: bash
+      run: |
+        echo "🔍 Verifying build output..."
+        
+        # Check for app bundle
+        APP_PATH="projects/keepkey-vault/target/universal-apple-darwin/release/bundle/macos/KeepKey Vault.app"
+        if [ -d "$APP_PATH" ]; then
+          echo "✅ App bundle found: $APP_PATH"
+          
+          # Check universal binary
+          echo "🔍 Checking binary architecture:"
+          lipo -info "$APP_PATH/Contents/MacOS/vault-v2"
+          
+          # Check code signing
+          echo "🔍 Checking code signature:"
+          codesign -vvv --deep --strict "$APP_PATH"
+          
+          # Check Gatekeeper approval
+          echo "🔍 Checking Gatekeeper approval:"
+          spctl -a -v "$APP_PATH"
+          
+        else
+          echo "❌ App bundle not found"
+          echo "📁 Contents of bundle directory:"
+          find projects/keepkey-vault/target/ -name "*.app" 2>/dev/null || echo "No .app found"
         fi
         
-        if [ -n "$CERT_INFO" ]; then
-          CERT_ID=$(echo "$CERT_INFO" | awk -F'"' '{print $2}')
-          echo "APPLE_SIGNING_IDENTITY=$CERT_ID" >> $GITHUB_ENV
-          echo "✅ Certificate imported successfully: $CERT_ID"
+        # Check for DMG
+        DMG_PATH="projects/keepkey-vault/target/universal-apple-darwin/release/bundle/dmg/KeepKey Vault_0.1.0_universal.dmg"
+        if [ -f "$DMG_PATH" ]; then
+          echo "✅ DMG found: $DMG_PATH"
+          echo "📏 File size: $(ls -lh "$DMG_PATH" | awk '{print $5}')"
+          
+          # Check DMG notarization
+          echo "🔍 Checking DMG notarization:"
+          xcrun stapler validate "$DMG_PATH" && echo "✅ DMG is properly stapled" || echo "⚠️ DMG stapling check failed"
+          
         else
-          echo "❌ No valid signing identity found"
-          exit 1
+          echo "❌ DMG not found"
+          echo "📁 Contents of dmg directory:"
+          find projects/keepkey-vault/target/ -name "*.dmg" 2>/dev/null || echo "No .dmg found"
         fi
 
-    - name: Build the app
-      uses: tauri-apps/tauri-action@v0
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        # Apple Developer signing
-        APPLE_CERTIFICATE: ${{ steps.check-signing.outputs.has_apple_cert == 'true' && secrets.APPLE_CERTIFICATE || '' }}
-        APPLE_CERTIFICATE_PASSWORD: ${{ steps.check-signing.outputs.has_apple_cert == 'true' && secrets.APPLE_CERTIFICATE_PASSWORD || '' }}
-        APPLE_SIGNING_IDENTITY: ${{ env.APPLE_SIGNING_IDENTITY || '' }}
-        # Tauri updater signing
-        TAURI_SIGNING_PRIVATE_KEY: ${{ steps.check-signing.outputs.has_tauri_key == 'true' && secrets.TAURI_PRIVATE_KEY || '' }}
-        TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ steps.check-signing.outputs.has_tauri_key == 'true' && secrets.TAURI_KEY_PASSWORD || '' }}
-        # Notarization credentials (API Key method - preferred)
-        APPLE_API_ISSUER: ${{ steps.check-signing.outputs.has_notarization == 'true' && secrets.APPLE_API_ISSUER || '' }}
-        APPLE_API_KEY: ${{ steps.check-signing.outputs.has_notarization == 'true' && secrets.APPLE_API_KEY || '' }}
-        APPLE_API_KEY_PATH: ${{ steps.check-signing.outputs.has_notarization == 'true' && secrets.APPLE_API_KEY_PATH || '' }}
-        # Notarization credentials (Apple ID method - fallback)
-        APPLE_ID: ${{ steps.check-signing.outputs.has_notarization == 'true' && secrets.APPLE_ID || '' }}
-        APPLE_PASSWORD: ${{ steps.check-signing.outputs.has_notarization == 'true' && secrets.APPLE_PASSWORD || '' }}
-        APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID || '' }}
-        # Build settings
-        RUST_BACKTRACE: 1
+    - name: Upload build artifacts
+      uses: actions/upload-artifact@v4
+      if: always()
       with:
-        projectPath: ./projects/keepkey-vault
-        args: --target ${{ matrix.target }}
-        tagName: v__VERSION__-${{ matrix.arch }}
-        releaseName: 'KeepKey Vault v__VERSION__ (${{ matrix.name }})'
-        releaseBody: |
-          ## KeepKey Vault v__VERSION__ (${{ matrix.name }})
+        name: macos-universal-build
+        path: |
+          projects/keepkey-vault/target/universal-apple-darwin/release/bundle/
+        retention-days: 7
+
+    - name: Create GitHub Release
+      if: github.ref == 'refs/heads/master' && steps.check-signing.outputs.has_apple_cert == 'true'
+      uses: softprops/action-gh-release@v1
+      with:
+        tag_name: v0.1.0-${{ github.run_number }}
+        name: KeepKey Vault v0.1.0 Build ${{ github.run_number }}
+        body: |
+          ## KeepKey Vault v0.1.0 - Universal macOS Build
           
-          ### 🍎 macOS Build (${{ matrix.name }})
-          - Built for ${{ matrix.name }} Macs
-          - Code signed with Apple Developer Certificate
-          - Notarized by Apple for security
-          - Institutional-grade self-custody solution
+          ### 🍎 macOS Universal Binary
+          - ✅ Supports both Intel and Apple Silicon Macs
+          - ✅ Code signed with Apple Developer Certificate
+          - ✅ Notarized by Apple for security
+          - ✅ No "can't be opened" errors
+          - ✅ Clean installation from DMG
           
           ### 🔒 Security Features
           - Hardware wallet integration
@@ -207,55 +213,24 @@ jobs:
           - Secure key management
           - Enterprise-grade encryption
           
-          ### 🛡️ Verification
+          ### 🛡️ Installation
+          1. Download the DMG file below
+          2. Mount the DMG
+          3. Drag KeepKey Vault to Applications
+          4. Launch immediately - no security warnings!
+          
+          ### 🔍 Verification
           This release is signed and notarized by Apple. macOS will verify the signature automatically.
-        releaseDraft: true
+        files: |
+          projects/keepkey-vault/target/universal-apple-darwin/release/bundle/dmg/*.dmg
+        draft: false
         prerelease: false
-        includeUpdaterJson: false
 
-    - name: Verify signatures and notarization
-      shell: bash
-      run: |
-        echo "🔐 Verifying signatures and notarization..."
-        
-        # Find the built DMG file
-        DMG_FILE=$(find ./projects/keepkey-vault/src-tauri/target/${{ matrix.target }}/release/bundle/dmg/ -name "*.dmg" | head -1)
-        
-        if [ -f "$DMG_FILE" ]; then
-          echo "✅ DMG found: $DMG_FILE"
-          echo "📏 File size: $(ls -lh "$DMG_FILE" | awk '{print $5}')"
-          
-          echo "🔍 Code signature verification:"
-          codesign -dv --verbose=4 "$DMG_FILE" 2>&1 | head -10
-          
-          echo "🔍 Signature validation:"
-          codesign --verify --deep --strict "$DMG_FILE" && echo "✅ Signature is valid" || echo "❌ Signature validation failed"
-          
-          echo "🔍 Notarization status:"
-          spctl -a -t open --context context:primary-signature "$DMG_FILE" && echo "✅ Notarization is valid" || echo "⚠️ Notarization check failed (may be expected for non-notarized builds)"
-          
-          echo "🔍 Gatekeeper assessment:"
-          spctl --assess --type execute "$DMG_FILE" && echo "✅ Gatekeeper will allow execution" || echo "⚠️ Gatekeeper assessment failed"
-        else
-          echo "❌ DMG not found for target ${{ matrix.target }}"
-          echo "📁 Contents of bundle directory:"
-          find ./projects/keepkey-vault/src-tauri/target/${{ matrix.target }}/release/bundle/ -type f || echo "Bundle directory not found"
-        fi
-
-    - name: Upload artifacts
-      uses: actions/upload-artifact@v4
-      if: always()
-      with:
-        name: macos-${{ matrix.arch }}-artifacts
-        path: |
-          projects/keepkey-vault/src-tauri/target/${{ matrix.target }}/release/bundle/
-        retention-days: 7
-
-    - name: Upload build logs
+    - name: Upload build logs on failure
       uses: actions/upload-artifact@v4
       if: failure()
       with:
-        name: macos-${{ matrix.arch }}-build-logs
+        name: macos-build-logs
         path: |
-          projects/keepkey-vault/src-tauri/target/${{ matrix.target }}/release/build/
+          projects/keepkey-vault/target/universal-apple-darwin/release/build/
         retention-days: 3 
