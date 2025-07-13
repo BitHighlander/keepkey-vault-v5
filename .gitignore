@@ -12,6 +12,7 @@
 .env.development.local
 .env.test.local
 .env.production.local
+.env.production
 certs/
 *.p12
 *.pem
@@ -110,4 +111,4 @@ nuclear-clean.sh
 
 # macOS signing artifacts
 *.provisionprofile
-*.entitlements .env.production
+*.entitlements
