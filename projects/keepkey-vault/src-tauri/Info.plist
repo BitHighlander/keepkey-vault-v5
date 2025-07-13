@@ -1,0 +1,96 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- App Description -->
+    <key>CFBundleDisplayName</key>
+    <string>KeepKey Vault</string>
+    
+    <key>CFBundleName</key>
+    <string>KeepKey Vault</string>
+    
+    <key>CFBundleShortVersionString</key>
+    <string>0.1.0</string>
+    
+    <key>CFBundleVersion</key>
+    <string>0.1.0</string>
+    
+    <!-- App Category -->
+    <key>LSApplicationCategoryType</key>
+    <string>public.app-category.finance</string>
+    
+    <!-- Copyright -->
+    <key>NSHumanReadableCopyright</key>
+    <string>Copyright © 2024 KeepKey LLC. All rights reserved.</string>
+    
+    <!-- Usage Descriptions -->
+    <key>NSCameraUsageDescription</key>
+    <string>KeepKey Vault needs camera access to scan QR codes for wallet addresses and transaction data.</string>
+    
+    <key>NSMicrophoneUsageDescription</key>
+    <string>KeepKey Vault may need microphone access for future voice authentication features.</string>
+    
+    <key>NSLocationUsageDescription</key>
+    <string>KeepKey Vault does not require location access.</string>
+    
+    <!-- USB Device Access -->
+    <key>NSUSBDeviceUsageDescription</key>
+    <string>KeepKey Vault needs USB access to communicate with KeepKey hardware wallets.</string>
+    
+    <!-- Network Usage -->
+    <key>NSNetworkUsageDescription</key>
+    <string>KeepKey Vault needs network access to communicate with blockchain networks and APIs.</string>
+    
+    <!-- File System Access -->
+    <key>NSDocumentsFolderUsageDescription</key>
+    <string>KeepKey Vault needs access to save configuration files and transaction logs.</string>
+    
+    <key>NSDownloadsFolderUsageDescription</key>
+    <string>KeepKey Vault needs access to save transaction receipts and backup files.</string>
+    
+    <!-- URL Schemes -->
+    <key>CFBundleURLTypes</key>
+    <array>
+        <dict>
+            <key>CFBundleURLName</key>
+            <string>KeepKey Vault Protocol</string>
+            <key>CFBundleURLSchemes</key>
+            <array>
+                <string>kkapi</string>
+                <string>keepkey</string>
+            </array>
+        </dict>
+    </array>
+    
+    <!-- Document Types -->
+    <key>CFBundleDocumentTypes</key>
+    <array>
+        <dict>
+            <key>CFBundleTypeExtensions</key>
+            <array>
+                <string>kkbackup</string>
+            </array>
+            <key>CFBundleTypeName</key>
+            <string>KeepKey Backup File</string>
+            <key>CFBundleTypeRole</key>
+            <string>Editor</string>
+            <key>LSTypeIsPackage</key>
+            <false/>
+        </dict>
+    </array>
+    
+    <!-- High Resolution Display Support -->
+    <key>NSHighResolutionCapable</key>
+    <true/>
+    
+    <!-- Prevent App Nap -->
+    <key>NSAppSleepDisabled</key>
+    <true/>
+    
+    <!-- Background Modes -->
+    <key>UIBackgroundModes</key>
+    <array>
+        <string>background-processing</string>
+    </array>
+</dict>
+</plist> 

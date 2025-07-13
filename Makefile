@@ -15,7 +15,7 @@
 #   - Rust/Cargo (for Tauri backend)
 #   - Bun or Node.js (for frontend dependencies)
 #   - Tauri CLI
-.PHONY: all vault vault-build vault-dev test clean rebuild setup deps check-deps help clean-ports
+.PHONY: all vault vault-build vault-dev test clean clean-build rebuild setup deps check-deps help clean-ports
 
 # Display help information
 help:
@@ -26,6 +26,7 @@ help:
 	@echo "  vault-build   - Build keepkey-vault-v4 for production"
 	@echo "  vault-dev     - Quick development build (skips dependency checks)"
 	@echo "  clean         - Clean all build artifacts"
+	@echo "  clean-build   - Clean only build outputs (keep dependencies)"
 	@echo "  rebuild       - Clean and rebuild everything"
 	@echo "  test          - Run tests"
 	@echo "  setup         - Initial project setup"
@@ -92,12 +93,74 @@ vault: clean-ports deps
 	fi
 
 # Build for production
-vault-build: deps
+vault-build: clean-build deps
 	@echo "🔧 Building KeepKey Vault v4 for production..."
-	@if command -v bun >/dev/null 2>&1; then \
-		cd projects/keepkey-vault && bun tauri build; \
+	@# Validate notarization requirements for macOS
+	@if [[ "$$OSTYPE" == "darwin"* ]]; then \
+		echo "🔍 Validating macOS notarization requirements..."; \
+		if [ ! -f ".env" ]; then \
+			echo "❌ ERROR: .env file not found in project root"; \
+			echo "   Please create .env file with APPLE_ID, APPLE_PASSWORD, and APPLE_TEAM_ID"; \
+			exit 1; \
+		fi; \
+		source .env; \
+		if [ -z "$$APPLE_ID" ]; then \
+			echo "❌ ERROR: APPLE_ID environment variable is required for notarization"; \
+			echo "   Please set APPLE_ID in .env file"; \
+			exit 1; \
+		fi; \
+		if [ -z "$$APPLE_PASSWORD" ]; then \
+			echo "❌ ERROR: APPLE_PASSWORD environment variable is required for notarization"; \
+			echo "   Please set APPLE_PASSWORD in .env file (use app-specific password)"; \
+			exit 1; \
+		fi; \
+		if [ -z "$$APPLE_TEAM_ID" ]; then \
+			echo "❌ ERROR: APPLE_TEAM_ID environment variable is required for notarization"; \
+			echo "   Please set APPLE_TEAM_ID in .env file"; \
+			exit 1; \
+		fi; \
+		export APPLE_ID; \
+		export APPLE_PASSWORD; \
+		export APPLE_TEAM_ID; \
+		echo "✅ Notarization requirements validated and exported"; \
+		echo "   APPLE_ID: $$APPLE_ID"; \
+		echo "   APPLE_PASSWORD: [$${#APPLE_PASSWORD} characters]"; \
+		echo "   APPLE_TEAM_ID: $$APPLE_TEAM_ID"; \
+	fi
+	@# Build with environment variables properly exported
+	@if [[ "$$OSTYPE" == "darwin"* ]]; then \
+		source .env && export APPLE_ID && export APPLE_PASSWORD && export APPLE_TEAM_ID; \
+	fi; \
+	if command -v bun >/dev/null 2>&1; then \
+		cd projects/keepkey-vault && if [[ "$$OSTYPE" == "darwin"* ]]; then source ../../.env && export APPLE_ID && export APPLE_PASSWORD && export APPLE_TEAM_ID; fi && bun tauri build; \
 	else \
-		cd projects/keepkey-vault && npm run tauri build; \
+		cd projects/keepkey-vault && if [[ "$$OSTYPE" == "darwin"* ]]; then source ../../.env && export APPLE_ID && export APPLE_PASSWORD && export APPLE_TEAM_ID; fi && npm run tauri build; \
+	fi
+	@# Verify notarization succeeded on macOS
+	@if [[ "$$OSTYPE" == "darwin"* ]]; then \
+		echo "🔍 Verifying build results..."; \
+		APP_PATH="projects/keepkey-vault/target/release/bundle/macos/KeepKey Vault.app"; \
+		if [ -d "$$APP_PATH" ]; then \
+			echo "✅ App bundle created: $$APP_PATH"; \
+			if spctl -a -v "$$APP_PATH" 2>&1 | grep -q "accepted"; then \
+				echo "✅ App passes Gatekeeper validation"; \
+				if spctl -a -v "$$APP_PATH" 2>&1 | grep -q "Notarized Developer ID"; then \
+					echo "✅ App is properly notarized"; \
+				else \
+					echo "❌ ERROR: App is signed but not notarized"; \
+					echo "   This indicates the notarization process failed during build"; \
+					echo "   Check the build output above for notarization errors"; \
+					exit 1; \
+				fi; \
+			else \
+				echo "❌ ERROR: App failed Gatekeeper validation"; \
+				spctl -a -v "$$APP_PATH"; \
+				exit 1; \
+			fi; \
+		else \
+			echo "❌ ERROR: App bundle not found at $$APP_PATH"; \
+			exit 1; \
+		fi; \
 	fi
 	@echo "✅ Production build complete"
 
@@ -133,6 +196,21 @@ clean:
 	@rm -rf projects/keepkey-vault/dist
 	@rm -rf projects/keepkey-vault/src-tauri/target
 	@echo "✅ All build artifacts cleaned"
+
+# Clean only build outputs (keep dependencies)
+clean-build:
+	@echo "🧹 Cleaning build outputs..."
+	@if [ -d "projects/keepkey-vault/target/release/bundle" ]; then \
+		cd projects/keepkey-vault && \
+		rm -rf target/release/bundle/dmg/rw.*.dmg 2>/dev/null || true; \
+		rm -rf target/release/bundle/macos/rw.*.dmg 2>/dev/null || true; \
+		rm -rf target/release/bundle/deb/rw.*.deb 2>/dev/null || true; \
+		rm -rf target/release/bundle/appimage/rw.*.AppImage 2>/dev/null || true; \
+		rm -rf target/release/bundle/msi/rw.*.msi 2>/dev/null || true; \
+		rm -rf target/release/bundle/nsis/rw.*.exe 2>/dev/null || true; \
+		find target/release/bundle -name ".DS_Store" -delete 2>/dev/null || true; \
+	fi
+	@echo "✅ Build outputs cleaned"
 
 # Force rebuild everything
 rebuild: clean all

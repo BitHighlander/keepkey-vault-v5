@@ -1,0 +1,64 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- Allow debugging/development without provisioning profile -->
+    <key>com.apple.security.get-task-allow</key>
+    <true/>
+    
+    <!-- Network access for API communication -->
+    <key>com.apple.security.network.client</key>
+    <true/>
+    
+    <!-- Allow outgoing network connections -->
+    <key>com.apple.security.network.server</key>
+    <true/>
+    
+    <!-- USB device access for hardware wallets -->
+    <key>com.apple.security.device.usb</key>
+    <true/>
+    
+    <!-- File system access for configuration and logs -->
+    <key>com.apple.security.files.user-selected.read-write</key>
+    <true/>
+    
+    <!-- Allow user downloads access -->
+    <key>com.apple.security.files.downloads.read-write</key>
+    <true/>
+    
+    <!-- Camera access for QR code scanning -->
+    <key>com.apple.security.device.camera</key>
+    <true/>
+    
+    <!-- Microphone access if needed for future features -->
+    <key>com.apple.security.device.audio-input</key>
+    <false/>
+    
+    <!-- Keychain access for secure storage -->
+    <key>keychain-access-groups</key>
+    <array>
+        <string>$(AppIdentifierPrefix)com.keepkey.vault</string>
+    </array>
+    
+    <!-- Disable App Sandbox for full system access -->
+    <key>com.apple.security.app-sandbox</key>
+    <false/>
+    
+    <!-- Hardened Runtime entitlements -->
+    <key>com.apple.security.cs.allow-jit</key>
+    <false/>
+    
+    <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+    <false/>
+    
+    <key>com.apple.security.cs.allow-dyld-environment-variables</key>
+    <false/>
+    
+    <key>com.apple.security.cs.disable-library-validation</key>
+    <false/>
+    
+    <!-- Allow loading of unsigned libraries if needed -->
+    <key>com.apple.security.cs.disable-executable-page-protection</key>
+    <false/>
+</dict>
+</plist> 
