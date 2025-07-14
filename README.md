@@ -1,4 +1,4 @@
-# KeepKey Vault v4
+# KeepKey Vault
 
 A modern, secure desktop application for managing KeepKey hardware wallets built with Tauri and Rust.
 
