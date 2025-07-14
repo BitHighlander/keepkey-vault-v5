@@ -23,32 +23,24 @@ fn greet(name: &str) -> String {
 
 // Dev tools toggle command
 #[tauri::command]
-fn toggle_dev_tools(window: tauri::Window) -> Result<(), String> {
-    #[cfg(debug_assertions)]
-    {
-        if window.is_devtools_open() {
-            window.close_devtools();
-            Ok(())
-        } else {
-            window.open_devtools();
-            Ok(())
-        }
-    }
-    #[cfg(not(debug_assertions))]
-    {
-        // In release mode, only allow if explicitly enabled
-        if std::env::var("KEEPKEY_ENABLE_DEVTOOLS").is_ok() {
-            if window.is_devtools_open() {
-                window.close_devtools();
-                Ok(())
-            } else {
-                window.open_devtools();
-                Ok(())
-            }
-        } else {
-            Err("Dev tools are disabled in release mode".to_string())
-        }
-    }
+fn toggle_dev_tools(_window: tauri::Window) -> Result<(), String> {
+    // Note: In Tauri 2, the devtools API has changed significantly.
+    // The methods is_devtools_open(), close_devtools(), and open_devtools() 
+    // are no longer available on the Window struct.
+    // 
+    // Devtools are now primarily controlled through:
+    // 1. Configuration in tauri.conf.json
+    // 2. The WebviewWindowBuilder.devtools() method during window creation
+    // 3. Development vs production builds
+    // 
+    // For development, devtools are enabled by default and can be opened with:
+    // - Right-click -> Inspect Element
+    // - Keyboard shortcuts (Ctrl+Shift+I on Windows/Linux, Cmd+Option+I on macOS)
+    //
+    // For runtime toggling, you would need to create a new window with devtools
+    // enabled/disabled rather than toggling the existing window.
+    
+    Err("Devtools toggling is not supported in Tauri 2. Use keyboard shortcuts or right-click menu to open devtools in development mode.".to_string())
 }
 
 // Get app version command
@@ -232,7 +224,7 @@ pub fn run() {
                     };
                     
                     // Build response with CORS headers
-                    let mut response_builder = Response::builder()
+                    let response_builder = Response::builder()
                         .status(status_code)
                         .header("Access-Control-Allow-Origin", "*")
                         .header("Access-Control-Allow-Methods", "GET,POST,PUT,DELETE,OPTIONS,PATCH")
@@ -292,35 +284,46 @@ pub fn run() {
                 }
             });
             
-            // Start REST/MCP server in background (only if enabled in preferences)
+            // Start REST/MCP server in background (ALWAYS ENABLED - no preference check)
             let server_handle = app.handle().clone();
             let server_queue_manager = device_queue_manager.clone();
             tauri::async_runtime::spawn(async move {
                 // Add a small delay to ensure config system is ready
                 tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
                 
-                // Check if API is enabled in preferences
-                let api_enabled = match commands::get_api_enabled().await {
-                    Ok(enabled) => enabled,
-                    Err(e) => {
-                        log::debug!("Could not check API status: {} - defaulting to enabled", e);
-                        true // Default to enabled if error
-                    }
-                };
+                log::info!("🚀 Starting REST/MCP server (always enabled)...");
+                log::info!("🔧 Debug: About to call server::start_server");
                 
-                if api_enabled {
-                    log::info!("🚀 API is enabled in preferences, starting server...");
-                    
-                    if let Err(e) = server::start_server(server_queue_manager, server_handle.clone(), cache_manager.clone()).await {
-                        log::error!("❌ Server error: {}", e);
-                        // Optionally emit error event to frontend
-                        let _ = server_handle.emit("server:error", serde_json::json!({
-                            "error": format!("Server failed to start: {}", e)
-                        }));
+                match server::start_server(server_queue_manager, server_handle.clone(), cache_manager.clone()).await {
+                    Ok(_) => {
+                        log::info!("✅ Server started successfully");
+                        log::info!("📡 Emitting server:ready event to frontend");
+                        // Emit success event to frontend
+                        match server_handle.emit("server:ready", serde_json::json!({
+                            "status": "ready",
+                            "rest_url": "http://127.0.0.1:1646/docs",
+                            "mcp_url": "http://127.0.0.1:1646/mcp",
+                            "proxy_url": "http://127.0.0.1:8080"
+                        })) {
+                            Ok(_) => log::info!("✅ server:ready event emitted successfully"),
+                            Err(e) => log::error!("❌ Failed to emit server:ready event: {}", e),
+                        }
                     }
-                } else {
-                    log::info!("🔒 API is disabled in preferences, skipping server startup");
+                    Err(e) => {
+                        log::error!("❌ CRITICAL: Server failed to start: {}", e);
+                        log::error!("🔧 Debug: Server startup error details: {:?}", e);
+                        // Emit error event to frontend - this should prevent ready state
+                        match server_handle.emit("server:error", serde_json::json!({
+                            "error": format!("Server failed to start: {}", e),
+                            "critical": true
+                        })) {
+                            Ok(_) => log::info!("✅ server:error event emitted successfully"),
+                            Err(emit_err) => log::error!("❌ Failed to emit server:error event: {}", emit_err),
+                        }
+                    }
                 }
+                
+                log::info!("🔧 Debug: Server startup task completed");
             });
             
             Ok(())

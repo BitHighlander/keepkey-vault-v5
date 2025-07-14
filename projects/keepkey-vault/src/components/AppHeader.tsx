@@ -5,7 +5,6 @@ import { invoke } from '@tauri-apps/api/core';
 
 export const AppHeader = () => {
   const [version, setVersion] = useState<string>('');
-  const [devToolsOpen, setDevToolsOpen] = useState(false);
 
   // Get app version on mount
   useEffect(() => {
@@ -15,39 +14,11 @@ export const AppHeader = () => {
         setVersion(appVersion);
       } catch (error) {
         console.error('Failed to get app version:', error);
-        setVersion('0.1.1'); // fallback
+        setVersion('0.1.2'); // fallback to current version
       }
     };
     getVersion();
   }, []);
-
-  // Handle dev tools toggle
-  const handleDevToolsToggle = async () => {
-    try {
-      await invoke('toggle_dev_tools');
-      setDevToolsOpen(!devToolsOpen);
-      console.log(devToolsOpen ? 'Dev Tools Closed' : 'Dev Tools Opened');
-    } catch (error) {
-      console.error('Failed to toggle dev tools:', error);
-    }
-  };
-
-  // Handle keyboard shortcut
-  useEffect(() => {
-    const handleKeyDown = (event: KeyboardEvent) => {
-      // Cmd+Option+I (Mac) or Ctrl+Shift+I (Windows/Linux)
-      if (
-        (event.metaKey && event.altKey && event.key === 'i') ||
-        (event.ctrlKey && event.shiftKey && event.key === 'I')
-      ) {
-        event.preventDefault();
-        handleDevToolsToggle();
-      }
-    };
-
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [devToolsOpen]);
 
   return (
     <Box
@@ -67,26 +38,15 @@ export const AppHeader = () => {
       <HStack justify="space-between" align="center" height="100%">
         <HStack gap={3}>
           <Text fontSize="sm" fontWeight="bold" color="white">
-            KeepKey Vault
-          </Text>
-          <Text fontSize="xs" color="gray.400" fontFamily="mono">
-            v{version}
+            KeepKey Vault v{version}
           </Text>
         </HStack>
         
         <HStack gap={2}>
-          <IconButton
-            aria-label="Toggle dev tools"
-            size="xs"
-            variant="ghost"
-            colorScheme={devToolsOpen ? 'blue' : 'gray'}
-            onClick={handleDevToolsToggle}
-            title={`${devToolsOpen ? 'Close' : 'Open'} Dev Tools (${
-              navigator.platform.includes('Mac') ? 'Cmd+Opt+I' : 'Ctrl+Shift+I'
-            })`}
-          >
-            <FaCode />
-          </IconButton>
+          {/* Dev tools functionality will be handled through config */}
+          <Text fontSize="xs" color="gray.500">
+            Press F12 or Cmd+Opt+I for DevTools
+          </Text>
         </HStack>
       </HStack>
     </Box>

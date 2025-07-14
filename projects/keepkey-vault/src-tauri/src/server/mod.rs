@@ -17,6 +17,7 @@ use tracing::info;
 use std::sync::Arc;
 use utoipa::OpenApi;
 use utoipa_swagger_ui::SwaggerUi;
+use tauri::Emitter;
 
 pub struct ServerState {
     pub device_queue_manager: crate::commands::DeviceQueueManager,
@@ -52,6 +53,7 @@ pub struct ServerState {
         api::system::apply_settings,
         api::system::clear_session,
         api::system::wipe_device,
+        api::system::exit_application,
         api::transactions::utxo_sign_transaction,
         api::transactions::eth_sign_transaction,
         api::transactions::eth_sign_message,
@@ -123,7 +125,7 @@ pub async fn start_server(device_queue_manager: crate::commands::DeviceQueueMana
     // Create server state
     let server_state = Arc::new(ServerState {
         device_queue_manager,
-        app_handle,
+        app_handle: app_handle.clone(),
         cache_manager,
     });
     
@@ -178,6 +180,7 @@ pub async fn start_server(device_queue_manager: crate::commands::DeviceQueueMana
         .route("/system/settings/apply", post(api::system::apply_settings))
         .route("/system/clear-session", post(api::system::clear_session))
         .route("/system/wipe-device", post(api::system::wipe_device))
+        .route("/system/exit", post(api::system::exit_application))
         
         // Transaction signing endpoints
         .route("/utxo/sign-transaction", post(api::transactions::utxo_sign_transaction))
@@ -204,12 +207,12 @@ pub async fn start_server(device_queue_manager: crate::commands::DeviceQueueMana
     let addr = "127.0.0.1:1646";
     let listener = TcpListener::bind(addr).await?;
     
-    // Start the proxy server on port 8080
+    // Start the proxy server on port 8080 - ensure it's ready before continuing
     let proxy_addr = "127.0.0.1:8080";
     let proxy_app = proxy::create_proxy_router();
     let proxy_listener = TcpListener::bind(proxy_addr).await?;
     
-    info!("🚀 Servers started successfully:");
+    info!("🚀 Starting servers:");
     info!("  📋 REST API: http://{}/api", addr);
     info!("  📚 API Documentation: http://{}/docs", addr);
     info!("  🔌 Device Management: http://{}/api/devices", addr);
@@ -218,10 +221,79 @@ pub async fn start_server(device_queue_manager: crate::commands::DeviceQueueMana
     info!("  🌐 Address Generation: http://{}/address/*", addr);
     info!("  🌍 Vault Proxy: http://{} -> vault.keepkey.com", proxy_addr);
     
-    // Spawn the proxy server in the background
+    // Test proxy server readiness by making a quick health check
+    let proxy_health_check = async {
+        let client = reqwest::Client::new();
+        let mut retries = 0;
+        let max_retries = 10;
+        
+        loop {
+            if retries >= max_retries {
+                return Err("Proxy server failed to start within timeout".to_string());
+            }
+            
+            match client.get(format!("http://{}/", proxy_addr)).send().await {
+                Ok(response) => {
+                    if response.status().is_success() {
+                        log::info!("✅ Proxy server health check passed");
+                        return Ok(());
+                    }
+                }
+                Err(e) => {
+                    log::warn!("⚠️ Proxy server not ready (attempt {}/{}): {}", retries + 1, max_retries, e);
+                }
+            }
+            
+            tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+            retries += 1;
+        }
+    };
+    
+    // Start the proxy server and wait for it to be ready
+    let proxy_handle = tokio::spawn(async move {
+        serve(proxy_listener, proxy_app).await
+    });
+    
+    // Small delay to let proxy server start
+    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+    
+    // Check if proxy server is ready
+    match proxy_health_check.await {
+        Ok(()) => {
+            info!("✅ Both servers started successfully and are ready");
+            
+            // Emit success event to frontend only after both servers are confirmed ready
+            match app_handle.emit("server:ready", serde_json::json!({
+                "status": "ready",
+                "rest_url": format!("http://{}/docs", addr),
+                "mcp_url": format!("http://{}/mcp", addr),
+                "proxy_url": format!("http://{}", proxy_addr),
+                "proxy_ready": true
+            })) {
+                Ok(_) => log::info!("✅ server:ready event emitted successfully"),
+                Err(e) => log::error!("❌ Failed to emit server:ready event: {}", e),
+            }
+        }
+        Err(e) => {
+            log::error!("❌ CRITICAL: Proxy server failed to start: {}", e);
+            
+            // Emit error event to frontend
+            match app_handle.emit("server:error", serde_json::json!({
+                "error": format!("Proxy server failed to start: {}", e),
+                "critical": true
+            })) {
+                Ok(_) => log::info!("✅ server:error event emitted successfully"),
+                Err(emit_err) => log::error!("❌ Failed to emit server:error event: {}", emit_err),
+            }
+            
+            return Err(e.into());
+        }
+    }
+    
+    // Monitor proxy server in the background
     tokio::spawn(async move {
-        if let Err(e) = serve(proxy_listener, proxy_app).await {
-            log::error!("Proxy server error: {}", e);
+        if let Err(e) = proxy_handle.await {
+            log::error!("❌ Proxy server task failed: {}", e);
         }
     });
     

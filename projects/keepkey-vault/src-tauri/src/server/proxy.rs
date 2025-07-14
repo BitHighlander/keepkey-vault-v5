@@ -1,12 +1,13 @@
 use axum::{
     extract::{Host, Path as AxumPath, Query, Request},
-    http::{HeaderMap, Method, StatusCode},
+    http::{HeaderMap, HeaderName, HeaderValue, Method, StatusCode},
     response::Response,
     routing::{any, delete, get, head, options, patch, post, put},
     Router,
     body::Body,
 };
 use std::collections::HashMap;
+use std::str::FromStr;
 use reqwest;
 use serde_json;
 use regex::Regex;
@@ -295,7 +296,7 @@ async fn proxy_keepkey_request(
     // Create HTTP client with appropriate settings
     let client = reqwest::Client::builder()
         .danger_accept_invalid_certs(false) // Use proper SSL validation for production
-        .timeout(std::time::Duration::from_secs(30))
+        .timeout(std::time::Duration::from_secs(60)) // Increased timeout for slow responses
         .user_agent("KeepKey-Vault-Proxy/2.0")
         .build()
         .unwrap();
@@ -348,8 +349,19 @@ async fn proxy_keepkey_request(
             convert_response_to_axum(response, target_domain).await
         }
         Err(e) => {
-            log::error!("❌ Proxy request failed for {}: {}", target_url, e);
-            create_error_response(StatusCode::BAD_GATEWAY, &format!("Proxy error: {}", e))
+            // Provide more detailed error information
+            let error_msg = if e.is_timeout() {
+                log::warn!("⏰ Proxy request timeout for {} (may be slow server response)", target_url);
+                "Upstream server response timeout - the target server is responding slowly"
+            } else if e.is_connect() {
+                log::error!("🔌 Proxy connection failed for {}: {}", target_url, e);
+                "Failed to connect to upstream server"
+            } else {
+                log::error!("❌ Proxy request failed for {}: {}", target_url, e);
+                "Proxy request failed"
+            };
+            
+            create_error_response(StatusCode::BAD_GATEWAY, &format!("{}: {}", error_msg, e))
         }
     }
 }
@@ -383,52 +395,113 @@ async fn convert_response_to_axum(response: reqwest::Response, target_domain: &s
         .unwrap_or("")
         .to_lowercase();
     
-    // Get response body
+    // Check if this is a React Server Components (RSC) streaming response
+    let is_rsc_stream = content_type.contains("text/x-component") || 
+                       content_type.contains("text/plain") ||
+                       content_type.contains("application/x-ndjson") ||
+                       content_type.contains("text/x-server-sent-events") ||
+                       response_headers.get("transfer-encoding")
+                           .and_then(|v| v.to_str().ok())
+                           .map(|v| v.contains("chunked"))
+                           .unwrap_or(false) ||
+                       response_headers.get("x-nextjs-stream")
+                           .is_some() ||
+                       response_headers.get("x-nextjs-page")
+                           .is_some();
+    
+    // For RSC streaming responses, pass through directly without buffering
+    if is_rsc_stream {
+        log::debug!("🔄 Streaming RSC response without buffering");
+        return stream_response_directly(response, status_code, response_headers, target_domain);
+    }
+    
+    // For non-streaming responses, process the body (URL rewriting, etc.)
     let body_bytes = match response.bytes().await {
-        Ok(b) => b,
+        Ok(bytes) => bytes,
         Err(e) => {
             log::error!("Failed to read response body: {}", e);
             return create_error_response(StatusCode::BAD_GATEWAY, "Failed to read response body");
         }
     };
-
-    // Process HTML content for URL rewriting
-    let final_body = if content_type.contains("text/html") {
-        let html_content = String::from_utf8_lossy(&body_bytes);
-        let rewritten_html = rewrite_keepkey_urls(&html_content, target_domain);
-        Body::from(rewritten_html.into_bytes())
-    } else if content_type.contains("javascript") || content_type.contains("json") {
-        // Also rewrite JavaScript and JSON responses that might contain URLs
-        let content = String::from_utf8_lossy(&body_bytes);
-        let rewritten_content = rewrite_js_urls(&content, target_domain);
-        Body::from(rewritten_content.into_bytes())
+    
+    // Process the body based on content type
+    let processed_body = if content_type.contains("text/html") {
+        // For HTML responses, rewrite URLs
+        let body_str = String::from_utf8_lossy(&body_bytes);
+        let processed = rewrite_urls(&body_str, target_domain);
+        processed.into_bytes()
     } else {
-        Body::from(body_bytes)
+        // For other content types, return as-is
+        body_bytes.to_vec()
     };
     
     // Build response with appropriate headers
     let mut resp_builder = Response::builder().status(status_code);
     
-    // Copy safe headers from the original response
+    // Copy headers from the original response, but skip content-length if we modified the body
+    let body_was_modified = content_type.contains("text/html");
     for (name, value) in response_headers.iter() {
         let name_str = name.as_str().to_lowercase();
-        if !is_hop_by_hop_header(&name_str) && !is_security_header(&name_str) {
+                 if !is_hop_by_hop_header(&name_str) && 
+            !(body_was_modified && name_str == "content-length") {  // Skip content-length if body was modified
+             if let Ok(header_name) = HeaderName::from_str(name.as_str()) {
+                 if let Ok(header_value) = HeaderValue::from_str(&value.to_str().unwrap_or_default()) {
+                     resp_builder = resp_builder.header(header_name, header_value);
+                 }
+             }
+        }
+    }
+    
+    // Set correct content-length for the processed body
+    resp_builder = resp_builder.header("content-length", processed_body.len().to_string());
+    
+    // Create the response
+    match resp_builder.body(Body::from(processed_body)) {
+        Ok(response) => response,
+        Err(e) => {
+            eprintln!("❌ Failed to build response: {}", e);
+            Response::builder()
+                .status(StatusCode::INTERNAL_SERVER_ERROR)
+                .body(Body::from("Internal Server Error"))
+                .unwrap()
+        }
+    }
+}
+
+/// Stream response directly without buffering (for RSC and other streaming responses)
+fn stream_response_directly(response: reqwest::Response, status_code: StatusCode, response_headers: reqwest::header::HeaderMap, target_domain: &str) -> Response {
+    // Convert reqwest body to axum body stream
+    let body_stream = response.bytes_stream();
+    let body = Body::from_stream(body_stream);
+    
+    // Build response with appropriate headers
+    let mut resp_builder = Response::builder().status(status_code);
+    
+    // Copy safe headers from the original response, preserving streaming headers
+    for (name, value) in response_headers.iter() {
+        let name_str = name.as_str().to_lowercase();
+        // For streaming responses, allow transfer-encoding and don't filter content-length
+        if name_str == "transfer-encoding" || name_str == "content-type" {
+            if let Ok(value_str) = value.to_str() {
+                resp_builder = resp_builder.header(name.as_str(), value_str);
+            }
+        } else if !is_hop_by_hop_header(&name_str) && !is_security_header(&name_str) && name_str != "content-length" {
             if let Ok(value_str) = value.to_str() {
                 resp_builder = resp_builder.header(name.as_str(), value_str);
             }
         }
     }
     
-    // Add proxy-specific headers
+    // Add proxy-specific headers but preserve streaming headers
     resp_builder = resp_builder
-        .header("cache-control", "no-cache, no-store, must-revalidate")
         .header("x-proxy-by", "keepkey-vault")
         .header("x-proxy-target", target_domain)
         .header("access-control-allow-origin", "*")
         .header("access-control-allow-methods", "GET, POST, PUT, DELETE, OPTIONS, PATCH")
         .header("access-control-allow-headers", "content-type, authorization, x-requested-with, x-keepkey-target, x-keepkey-subdomain");
     
-    resp_builder.body(final_body).unwrap()
+    // Don't override cache-control for streaming responses
+    resp_builder.body(body).unwrap()
 }
 
 /// Rewrite URLs in HTML content to point to our proxy for all KeepKey domains (wildcard support with subdomain preservation)
@@ -475,7 +548,7 @@ fn rewrite_js_urls(content: &str, target_domain: &str) -> String {
     let mut result = content.to_string();
     let proxy_base = "http://localhost:8080";
     // Extract subdomain
-    let subdomain = target_domain.trim_start_matches("https://").split('.').next().unwrap_or("");
+    let _subdomain = target_domain.trim_start_matches("https://").split('.').next().unwrap_or("");
     // Enhanced regex to capture subdomain
     lazy_static::lazy_static! {
         static ref KEEPKEY_JS_REGEX: Regex = Regex::new(r#"["']https?://((?:[a-zA-Z0-9-]+\.)*)keepkey\.com([^"']*)["']"#).unwrap();
@@ -533,6 +606,13 @@ fn rewrite_attribute_urls(html: &str, attribute: &str, proxy_base: &str) -> Stri
     result = result.replace(&pattern_single, &replacement_single);
     
     result
+}
+
+/// Rewrite URLs in content based on content type
+fn rewrite_urls(content: &str, target_domain: &str) -> String {
+    // For now, just use the HTML rewriter for all content
+    // In the future, we could have different rewriters for different content types
+    rewrite_keepkey_urls(content, target_domain)
 }
 
 /// Check if header is a hop-by-hop header that shouldn't be forwarded

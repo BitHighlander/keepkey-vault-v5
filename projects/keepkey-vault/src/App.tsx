@@ -15,6 +15,7 @@ import { useOnboardingState } from './hooks/useOnboardingState';
 import { VaultInterface } from './components/VaultInterface';
 import { useWallet } from './contexts/WalletContext';
 import { DialogProvider, useDialog } from './contexts/DialogContext'
+import { useTroubleshootingWizard } from './contexts/DialogContext'
 
 // Define the expected structure of DeviceFeatures from Rust
 interface DeviceFeatures {
@@ -52,6 +53,26 @@ interface ApplicationState {
 }
 
 function App() {
+    const [loadingStatus, setLoadingStatus] = useState<string>('Starting...')
+    const [deviceConnected, setDeviceConnected] = useState<boolean>(false)
+    const [deviceInfo, setDeviceInfo] = useState<any>(null)
+    const [deviceUpdateComplete, setDeviceUpdateComplete] = useState<boolean>(false)
+    const [serverReady, setServerReady] = useState<boolean>(false)
+    const [serverError, setServerError] = useState<string | null>(null)
+    const [isRestarting, setIsRestarting] = useState<boolean>(false)
+    
+    const troubleshootingWizard = useTroubleshootingWizard()
+
+    const reinitialize = () => {
+        console.log("🔄 Reinitializing app state...")
+        setLoadingStatus('Starting...')
+        setDeviceConnected(false)
+        setDeviceInfo(null)
+        setDeviceUpdateComplete(false)
+        setServerReady(false)
+        setServerError(null)
+    }
+
     // AppContent is an inner component with access to DialogContext
     const AppContent = () => {
         // We're tracking application state from backend events
@@ -207,6 +228,8 @@ function App() {
         useEffect(() => {
             let unlistenStatusUpdate: (() => void) | undefined;
             let unlistenDeviceReady: (() => void) | undefined;
+            let unlistenServerReady: (() => void) | undefined;
+            let unlistenServerError: (() => void) | undefined;
 
             const setupEventListeners = async () => {
                 try {
@@ -220,6 +243,23 @@ function App() {
                     } catch (error) {
                         console.log('DeviceUpdateManager: frontend_ready command failed:', error);
                     }
+                    
+                    // TEMPORARY: Check if servers are running and manually set server ready
+                    setTimeout(async () => {
+                        try {
+                            console.log('🔍 Manually checking if servers are running...');
+                            const response = await fetch('http://127.0.0.1:1646/api/health');
+                            if (response.ok) {
+                                console.log('✅ API server is running, manually setting serverReady = true');
+                                setServerReady(true);
+                                setServerError(null);
+                            }
+                        } catch (error) {
+                            console.log('❌ API server check failed:', error);
+                            setServerError('API server not responding');
+                            setServerReady(false);
+                        }
+                    }, 2000); // Check after 2 seconds
                     
                     // Listen for status updates from backend
                     console.log('🎯 Setting up status:update listener...');
@@ -294,6 +334,30 @@ function App() {
                         setDeviceUpdateComplete(false);
                     });
 
+                    // Listen for server ready events
+                    console.log('🎯 Setting up server:ready listener...');
+                    unlistenServerReady = await listen('server:ready', (event) => {
+                        console.log('📡 Received server:ready event:', event.payload);
+                        setServerReady(true);
+                        setServerError(null);
+                        console.log('✅ REST API server is ready');
+                    });
+
+                    // Listen for server error events
+                    console.log('🎯 Setting up server:error listener...');
+                    unlistenServerError = await listen('server:error', (event) => {
+                        console.log('📡 Received server:error event:', event.payload);
+                        const payload = event.payload as any;
+                        setServerError(payload.error || 'Server failed to start');
+                        setServerReady(false);
+                        console.error('❌ REST API server failed:', payload.error);
+                        
+                        // If server error is critical, keep loading status as error
+                        if (payload.critical) {
+                            setLoadingStatus('Server startup failed');
+                        }
+                    });
+
                     console.log('✅ All event listeners set up successfully');
                     
                     // Return cleanup function that removes all listeners
@@ -304,6 +368,8 @@ function App() {
                         if (unlistenFeaturesUpdated) unlistenFeaturesUpdated();
                         if (unlistenAccessError) unlistenAccessError();
                         if (unlistenDeviceDisconnected) unlistenDeviceDisconnected();
+                        if (unlistenServerReady) unlistenServerReady();
+                        if (unlistenServerError) unlistenServerError();
                     };
                     
                 } catch (error) {
@@ -316,6 +382,8 @@ function App() {
             return () => {
                 if (unlistenStatusUpdate) unlistenStatusUpdate();
                 if (unlistenDeviceReady) unlistenDeviceReady();
+                if (unlistenServerReady) unlistenServerReady();
+                if (unlistenServerError) unlistenServerError();
             };
         }, []); // Empty dependency array ensures this runs once on mount and cleans up on unmount
 
@@ -328,16 +396,18 @@ function App() {
           setTimeout(() => setHasCopied(false), 2000);
         };
 
-        // Show the main vault interface ONLY when device is ready AND updates are complete
+        // Show the main vault interface ONLY when device is ready, updates are complete, AND server is ready
         console.log('📱 [App] Checking if should show VaultInterface:', {
             loadingStatus,
             deviceConnected,
             deviceUpdateComplete,
-            shouldShow: loadingStatus === "Device ready" && deviceConnected && deviceUpdateComplete
+            serverReady,
+            serverError,
+            shouldShow: loadingStatus === "Device ready" && deviceConnected && deviceUpdateComplete // TEMP: Removed server check
         });
         
-        if (loadingStatus === "Device ready" && deviceConnected && deviceUpdateComplete) {
-            console.log('📱 [App] ✅ All conditions met - showing VaultInterface!');
+        if (loadingStatus === "Device ready" && deviceConnected && deviceUpdateComplete) { // TEMP: Removed server check
+            console.log('📱 [App] ✅ All conditions met (device ready) - showing VaultInterface! (server check temporarily disabled)');
             return <VaultInterface />;
         }
 

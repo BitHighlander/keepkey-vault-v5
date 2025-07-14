@@ -510,3 +510,59 @@ async fn process_system_request(
     
     Ok(response)
 } 
+
+/// Exit application endpoint - allows remote shutdown
+#[derive(Deserialize, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ExitRequest {
+    /// Optional confirmation message
+    pub confirm: Option<String>,
+}
+
+#[derive(Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ExitResponse {
+    pub success: bool,
+    pub message: String,
+}
+
+#[utoipa::path(
+    post,
+    path = "/system/exit",
+    request_body = ExitRequest,
+    responses(
+        (status = 200, description = "Application exit initiated", body = ExitResponse),
+        (status = 500, description = "Internal server error")
+    ),
+    tag = "system"
+)]
+pub async fn exit_application(
+    State(state): State<Arc<ServerState>>,
+    Json(request): Json<ExitRequest>,
+) -> Result<Json<ExitResponse>, Response> {
+    log::info!("🚪 Exit application request received");
+    
+    // Optional confirmation check
+    if let Some(confirm) = &request.confirm {
+        log::info!("Exit confirmation: {}", confirm);
+    }
+    
+    // Get app handle from state
+    let app_handle = &state.app_handle;
+    
+    // Log the shutdown
+    log::info!("🚪 Shutting down application via REST API request...");
+    
+    // Spawn a task to exit after a brief delay (to allow response to be sent)
+    let app_handle_clone = app_handle.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+        log::info!("🚪 Executing application exit...");
+        app_handle_clone.exit(0);
+    });
+    
+    Ok(Json(ExitResponse {
+        success: true,
+        message: "Application shutdown initiated".to_string(),
+    }))
+} 

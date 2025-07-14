@@ -9,7 +9,7 @@ pub async fn process_transaction_request(
 ) -> Result<DeviceResponse, String> {
     let response = match request {
         // Bitcoin/UTXO signing
-        DeviceRequest::SignTransaction { coin: _coin, inputs, outputs, version, lock_time } => {
+        DeviceRequest::SignTransaction { coin: _, inputs, outputs, version: _, lock_time: _ } => {
             // Convert our internal types to keepkey-rust types
             let kk_inputs: Vec<keepkey_rust::messages::TxInputType> = inputs.iter().map(|input| {
                 keepkey_rust::messages::TxInputType {
@@ -212,10 +212,10 @@ pub async fn process_transaction_request(
         },
         
         // Cosmos Amino signing
-        DeviceRequest::CosmosSignAmino { sign_doc, signer_address } |
-        DeviceRequest::ThorchainSignAmino { sign_doc, signer_address } |
-        DeviceRequest::OsmosisSignAmino { sign_doc, signer_address } |
-        DeviceRequest::MayachainSignAmino { sign_doc, signer_address } => {
+        DeviceRequest::CosmosSignAmino { sign_doc: _, signer_address: _ } |
+        DeviceRequest::ThorchainSignAmino { sign_doc: _, signer_address: _ } |
+        DeviceRequest::OsmosisSignAmino { sign_doc: _, signer_address: _ } |
+        DeviceRequest::MayachainSignAmino { sign_doc: _, signer_address: _ } => {
             // For now, return a placeholder response
             // TODO: Implement actual Cosmos/Thorchain signing
             DeviceResponse::CosmosSignedAmino {
@@ -229,7 +229,7 @@ pub async fn process_transaction_request(
         },
         
         // Binance signing
-        DeviceRequest::BinanceSignTransaction { sign_doc, signer_address } => {
+        DeviceRequest::BinanceSignTransaction { sign_doc: _, signer_address: _ } => {
             // TODO: Implement Binance signing
             DeviceResponse::SignedTransaction {
                 request_id: request_id.to_string(),
@@ -242,7 +242,7 @@ pub async fn process_transaction_request(
         },
         
         // XRP signing
-        DeviceRequest::XrpSignTransaction { transaction } => {
+        DeviceRequest::XrpSignTransaction { transaction: _ } => {
             // TODO: Implement XRP signing
             DeviceResponse::SignedTransaction {
                 request_id: request_id.to_string(),
