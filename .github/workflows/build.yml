@@ -155,11 +155,11 @@ jobs:
         KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
         MACOS_CERTIFICATE_BASE64: ${{ secrets.MACOS_CERTIFICATE_BASE64 }}
         MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
-              with:
-          projectPath: ./projects/keepkey-vault
-          tagName: v__VERSION__ # the action automatically replaces __VERSION__ with the app version
-          releaseName: 'KeepKey Vault v__VERSION__'
-          args: ${{ matrix.platform == 'macos-latest' && '--target universal-apple-darwin' || '' }}
+      with:
+        projectPath: ./projects/keepkey-vault
+        tagName: v__VERSION__ # the action automatically replaces __VERSION__ with the app version
+        releaseName: 'KeepKey Vault v__VERSION__'
+        args: ${{ matrix.platform == 'macos-latest' && '--target universal-apple-darwin' || '' }}
         releaseBody: |
           ## KeepKey Vault v__VERSION__
           
