@@ -145,10 +145,21 @@ jobs:
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         RUST_BACKTRACE: 1  # Enable Rust backtraces for better error messages
-      with:
-        projectPath: ./projects/keepkey-vault
-        tagName: v__VERSION__ # the action automatically replaces __VERSION__ with the app version
-        releaseName: 'KeepKey Vault v__VERSION__'
+        # Apple notarization credentials
+        APPLE_ID: ${{ secrets.APPLE_ID }}
+        APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+        APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        # Apple code signing
+        CODESIGN_IDENTITY: ${{ secrets.CODESIGN_IDENTITY }}
+        KEYCHAIN_NAME: ${{ secrets.KEYCHAIN_NAME }}
+        KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+        MACOS_CERTIFICATE_BASE64: ${{ secrets.MACOS_CERTIFICATE_BASE64 }}
+        MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+              with:
+          projectPath: ./projects/keepkey-vault
+          tagName: v__VERSION__ # the action automatically replaces __VERSION__ with the app version
+          releaseName: 'KeepKey Vault v__VERSION__'
+          args: ${{ matrix.platform == 'macos-latest' && '--target universal-apple-darwin' || '' }}
         releaseBody: |
           ## KeepKey Vault v__VERSION__
           

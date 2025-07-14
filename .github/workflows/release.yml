@@ -39,11 +39,8 @@ jobs:
       matrix:
         include:
           - platform: 'macos-latest'
-            args: '--target aarch64-apple-darwin'
-            name: 'macOS-arm64'
-          - platform: 'macos-latest'
-            args: '--target x86_64-apple-darwin'
-            name: 'macOS-x64'
+            args: '--target universal-apple-darwin'
+            name: 'macOS-universal'
           - platform: 'ubuntu-22.04'
             args: ''
             name: 'linux-x64'
@@ -110,6 +107,16 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ steps.check-signing.outputs.has_signing_key == 'true' && secrets.TAURI_PRIVATE_KEY || '' }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ steps.check-signing.outputs.has_signing_key == 'true' && secrets.TAURI_KEY_PASSWORD || '' }}
+          # Apple notarization credentials
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          # Apple code signing
+          CODESIGN_IDENTITY: ${{ secrets.CODESIGN_IDENTITY }}
+          KEYCHAIN_NAME: ${{ secrets.KEYCHAIN_NAME }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+          MACOS_CERTIFICATE_BASE64: ${{ secrets.MACOS_CERTIFICATE_BASE64 }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
         with:
           projectPath: ./projects/keepkey-vault
           releaseId: ${{ needs.create-release.outputs.release_id }}

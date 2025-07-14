@@ -11,31 +11,31 @@ echo "🚀 Building KeepKey Vault v5..."
 if [[ "$OSTYPE" == "darwin"* ]]; then
     echo "🔍 Validating macOS notarization requirements..."
     
-    # Source environment variables
+    # Source environment variables from .env file if it exists (for local development)
     if [ -f ".env" ]; then
+        echo "📄 Loading environment variables from .env file..."
         source .env
     else
-        echo "❌ ERROR: .env file not found in project root"
-        echo "   Please create .env file with APPLE_ID, APPLE_PASSWORD, and APPLE_TEAM_ID"
-        exit 1
+        echo "📄 No .env file found, using environment variables..."
     fi
     
     # Check required environment variables
     if [ -z "$APPLE_ID" ]; then
         echo "❌ ERROR: APPLE_ID environment variable is required for notarization"
-        echo "   Please set APPLE_ID in .env file"
+        echo "   Please set APPLE_ID in .env file (local) or GitHub Secrets (CI)"
         exit 1
     fi
     
     if [ -z "$APPLE_PASSWORD" ]; then
         echo "❌ ERROR: APPLE_PASSWORD environment variable is required for notarization"
-        echo "   Please set APPLE_PASSWORD in .env file (use app-specific password)"
+        echo "   Please set APPLE_PASSWORD in .env file (local) or GitHub Secrets (CI)"
+        echo "   Use app-specific password from Apple ID settings"
         exit 1
     fi
     
     if [ -z "$APPLE_TEAM_ID" ]; then
         echo "❌ ERROR: APPLE_TEAM_ID environment variable is required for notarization"
-        echo "   Please set APPLE_TEAM_ID in .env file"
+        echo "   Please set APPLE_TEAM_ID in .env file (local) or GitHub Secrets (CI)"
         exit 1
     fi
     

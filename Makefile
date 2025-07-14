@@ -132,14 +132,14 @@ vault-build: clean-build deps
 		source .env && export APPLE_ID && export APPLE_PASSWORD && export APPLE_TEAM_ID; \
 	fi; \
 	if command -v bun >/dev/null 2>&1; then \
-		cd projects/keepkey-vault && if [[ "$$OSTYPE" == "darwin"* ]]; then source ../../.env && export APPLE_ID && export APPLE_PASSWORD && export APPLE_TEAM_ID; fi && bun tauri build; \
+		cd projects/keepkey-vault && if [[ "$$OSTYPE" == "darwin"* ]]; then source ../../.env && export APPLE_ID && export APPLE_PASSWORD && export APPLE_TEAM_ID && bun tauri build --target universal-apple-darwin; else bun tauri build; fi; \
 	else \
-		cd projects/keepkey-vault && if [[ "$$OSTYPE" == "darwin"* ]]; then source ../../.env && export APPLE_ID && export APPLE_PASSWORD && export APPLE_TEAM_ID; fi && npm run tauri build; \
+		cd projects/keepkey-vault && if [[ "$$OSTYPE" == "darwin"* ]]; then source ../../.env && export APPLE_ID && export APPLE_PASSWORD && export APPLE_TEAM_ID && npm run tauri build -- --target universal-apple-darwin; else npm run tauri build; fi; \
 	fi
 	@# Verify notarization succeeded on macOS
 	@if [[ "$$OSTYPE" == "darwin"* ]]; then \
 		echo "🔍 Verifying build results..."; \
-		APP_PATH="projects/keepkey-vault/target/release/bundle/macos/KeepKey Vault.app"; \
+		APP_PATH="projects/keepkey-vault/target/universal-apple-darwin/release/bundle/macos/KeepKey Vault.app"; \
 		if [ -d "$$APP_PATH" ]; then \
 			echo "✅ App bundle created: $$APP_PATH"; \
 			if spctl -a -v "$$APP_PATH" 2>&1 | grep -q "accepted"; then \
