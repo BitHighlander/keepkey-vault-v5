@@ -1,0 +1,48 @@
+{
+  "extractedAt": "2025-07-17T14:47:07.587Z",
+  "totalAssets": 10901,
+  "networks": 21,
+  "pathBlockchains": 0,
+  "topNetworks": [
+    {
+      "network": "eip155:1",
+      "assetCount": 5025
+    },
+    {
+      "network": "eip155:56",
+      "assetCount": 3420
+    },
+    {
+      "network": "eip155:137",
+      "assetCount": 1093
+    },
+    {
+      "network": "eip155:42161",
+      "assetCount": 622
+    },
+    {
+      "network": "eip155:43114",
+      "assetCount": 394
+    },
+    {
+      "network": "eip155:10",
+      "assetCount": 193
+    },
+    {
+      "network": "eip155:100",
+      "assetCount": 84
+    },
+    {
+      "network": "cosmos:cosmoshub-4",
+      "assetCount": 41
+    },
+    {
+      "network": "eip155:42170",
+      "assetCount": 14
+    },
+    {
+      "network": "eip155:8453",
+      "assetCount": 2
+    }
+  ]
+}

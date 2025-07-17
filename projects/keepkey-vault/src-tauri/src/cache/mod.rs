@@ -2,10 +2,14 @@ pub mod manager;
 pub mod frontload;
 pub mod migrations;
 pub mod types;
+pub mod portfolio;
+pub mod assets;
+pub mod seed_data;
 
 pub use manager::CacheManager;
 pub use frontload::FrontloadController;
 pub use types::{CachedPubkey, CacheMetadata, CacheStatus};
+pub use assets::{CachedAsset, CachedPath};
 
 use std::sync::Arc;
 

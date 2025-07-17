@@ -4,6 +4,7 @@ use keepkey_rust::device_queue::DeviceQueueHandle;
 use super::{CacheManager, CacheMetadata};
 use super::types::FrontloadStatus;
 use crate::commands::{DeviceQueueManager, DeviceRequest, DeviceResponse};
+use crate::pioneer_api::{PioneerClient, PortfolioRequest};
 use serde::{Deserialize, Serialize};
 use serde_json;
 
@@ -11,60 +12,50 @@ use serde_json;
 pub struct FrontloadController {
     cache: Arc<CacheManager>,
     queue_manager: DeviceQueueManager,
+    pioneer_client: Option<PioneerClient>,
 }
 
-/// Derivation path from default-paths.json
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DefaultPath {
-    pub id: String,
-    pub note: String,
-    pub blockchain: String,
-    pub symbol: String,
-    pub networks: Vec<String>,
-    pub script_type: String,
-    #[serde(rename = "addressNList")]
-    pub address_n_list: Vec<u32>,
-    #[serde(rename = "addressNListMaster")]
-    pub address_n_list_master: Vec<u32>,
-    pub curve: String,
-    #[serde(rename = "showDisplay")]
-    pub show_display: bool,
-}
 
-/// Default paths configuration
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DefaultPathsConfig {
-    pub version: String,
-    pub description: String,
-    pub paths: Vec<DefaultPath>,
-}
-
-/// Load default paths from JSON file
-fn load_default_paths() -> Result<DefaultPathsConfig> {
-    let json_content = include_str!("../../default-paths.json");
-    let config: DefaultPathsConfig = serde_json::from_str(json_content)
-        .map_err(|e| anyhow!("Failed to parse default-paths.json: {}", e))?;
-    Ok(config)
-}
 
 impl FrontloadController {
-    /// Create a new frontload controller
+    /// Create a new frontload controller with optional Pioneer API integration
     pub fn new(cache: Arc<CacheManager>, queue_manager: DeviceQueueManager) -> Self {
+        // Try to create Pioneer client - don't fail if API key is missing
+        let pioneer_client = match std::env::var("PIONEER_API_KEY") {
+            Ok(api_key) => {
+                match PioneerClient::new(Some(api_key)) {
+                    Ok(client) => {
+                        log::info!("✅ Pioneer API client initialized for portfolio fetching");
+                        Some(client)
+                    }
+                    Err(e) => {
+                        log::warn!("⚠️ Failed to initialize Pioneer API client: {}", e);
+                        None
+                    }
+                }
+            }
+            Err(_) => {
+                log::info!("ℹ️ No PIONEER_API_KEY found, portfolio fetching disabled");
+                None
+            }
+        };
+
         Self {
             cache,
             queue_manager,
+            pioneer_client,
         }
     }
     
-    /// Start frontloading for a device using default paths from JSON
+    /// Start frontloading for a device using cached asset and path data
     pub async fn frontload_device(&self, device_id: &str) -> Result<()> {
-        log::info!("🔄 Starting frontload for device: {}", device_id);
+        log::info!("🔄 Starting cache-first frontload for device: {}", device_id);
         
-        // Load default paths from JSON
-        let paths_config = load_default_paths()
-            .map_err(|e| anyhow!("Failed to load default paths: {}", e))?;
+        // Get cached derivation paths instead of hardcoded JSON
+        let cached_paths = self.cache.get_all_paths().await
+            .map_err(|e| anyhow!("Failed to load cached paths: {}", e))?;
         
-        log::info!("📋 Loaded {} default paths from config", paths_config.paths.len());
+        log::info!("📋 Using {} cached derivation paths from asset data", cached_paths.len());
         
         // Update metadata to mark as in progress
         let metadata = CacheMetadata {
@@ -107,38 +98,50 @@ impl FrontloadController {
         let start_time = std::time::Instant::now();
         let mut total_cached = 0;
         let mut progress = 0;
-        let total_paths = paths_config.paths.len();
+        let total_paths = cached_paths.len();
         let mut errors = Vec::new();
         
-        // Process each path from default-paths.json
-        for (i, path_config) in paths_config.paths.iter().enumerate() {
-            log::debug!("🔄 Processing path {}/{}: {} ({})", 
-                i + 1, total_paths, path_config.id, path_config.note);
+        // Process each cached derivation path
+        for (i, cached_path) in cached_paths.iter().enumerate() {
+            log::debug!("🔄 Processing cached path {}/{}: {} ({})", 
+                i + 1, total_paths, cached_path.path_id, cached_path.blockchain);
             
             // Skip if already cached (check cache first)
-            let derivation_path = self.address_n_list_to_string(&path_config.address_n_list);
-            if self.is_already_cached(device_id, &derivation_path, &path_config.blockchain, &path_config.script_type).await? {
-                log::debug!("⏭️ Skipping already cached path: {}", path_config.id);
+            let derivation_path = self.address_n_list_to_string(&cached_path.address_n_list);
+            if self.is_already_cached(device_id, &derivation_path, &cached_path.blockchain, cached_path.script_type.as_deref().unwrap_or("")).await? {
+                log::debug!("⏭️ Skipping already cached path: {}", cached_path.path_id);
                 continue;
             }
             
             // Frontload both account-level xpub and individual addresses
-            match self.frontload_path(&queue_handle, device_id, path_config).await {
+            match self.frontload_cached_path(&queue_handle, device_id, cached_path).await {
                 Ok(count) => {
                     total_cached += count;
-                    log::debug!("✅ Cached {} items for path: {}", count, path_config.id);
+                    log::debug!("✅ Cached {} items for path: {}", count, cached_path.path_id);
                 }
                 Err(e) => {
-                    log::warn!("⚠️ Failed to frontload path {}: {}", path_config.id, e);
-                    errors.push(format!("{}: {}", path_config.id, e));
+                    log::warn!("⚠️ Failed to frontload path {}: {}", cached_path.path_id, e);
+                    errors.push(format!("{}: {}", cached_path.path_id, e));
                 }
             }
             
-            // Update progress
-            progress = ((i + 1) * 100) / total_paths;
+            // Update progress for xpub/address collection (0-70%)
+            progress = ((i + 1) * 70) / total_paths;
             let mut progress_metadata = metadata.clone();
             progress_metadata.frontload_progress = progress as i32;
             self.cache.update_cache_metadata(&progress_metadata).await?;
+        }
+
+        // Phase 2: Fetch portfolio data using collected xpubs (70-100%)
+        log::info!("💰 Starting portfolio data collection phase...");
+        match self.frontload_portfolio_data(device_id).await {
+            Ok(portfolio_count) => {
+                log::info!("✅ Cached portfolio data for {} assets", portfolio_count);
+            }
+            Err(e) => {
+                log::warn!("⚠️ Failed to fetch portfolio data: {}", e);
+                errors.push(format!("Portfolio fetch: {}", e));
+            }
         }
         
         // Update final metadata
@@ -219,28 +222,28 @@ impl FrontloadController {
         }
     }
     
-    /// Frontload a single path configuration
-    async fn frontload_path(
+    /// Frontload a single cached path configuration
+    async fn frontload_cached_path(
         &self,
         queue_handle: &DeviceQueueHandle,
         device_id: &str,
-        path_config: &DefaultPath,
+        cached_path: &super::CachedPath,
     ) -> Result<usize> {
         let mut count = 0;
         
         // Convert the path to string format
-        let account_path_str = self.address_n_list_to_string(&path_config.address_n_list);
-        let master_path_str = self.address_n_list_to_string(&path_config.address_n_list_master);
+        let account_path_str = self.address_n_list_to_string(&cached_path.address_n_list);
+        let master_path_str = self.address_n_list_to_string(&cached_path.address_n_list_master);
         
         // For Bitcoin-like coins, get both XPUB (account level) and addresses (master level)
-        if matches!(path_config.blockchain.as_str(), "bitcoin" | "bitcoincash" | "litecoin" | "dogecoin" | "dash") {
+        if matches!(cached_path.blockchain.as_str(), "bitcoin" | "bitcoincash" | "litecoin" | "dogecoin" | "dash") {
             // 1. Get XPUB at account level (m/44'/0'/0')
             let xpub_request = DeviceRequest::GetPublicKey {
                 path: account_path_str.clone(),
-                coin_name: Some(path_config.blockchain.clone()),
-                script_type: Some(path_config.script_type.clone()),
-                ecdsa_curve_name: Some("secp256k1".to_string()),
-                show_display: Some(false),
+                coin_name: Some(cached_path.blockchain.clone()),
+                script_type: cached_path.script_type.clone(),
+                ecdsa_curve_name: Some(cached_path.curve.clone()),
+                show_display: Some(cached_path.show_display),
             };
             
             match self.send_device_request(queue_handle, xpub_request).await {
@@ -248,29 +251,29 @@ impl FrontloadController {
                     if let Some(cached) = super::types::CachedPubkey::from_device_response(
                         device_id,
                         &account_path_str,
-                        &path_config.blockchain,
-                        Some(&path_config.script_type),
+                        &cached_path.blockchain,
+                        cached_path.script_type.as_deref(),
                         &response,
                     ) {
                         if let Err(e) = self.cache.save_pubkey(&cached).await {
-                            log::warn!("Failed to cache XPUB for {}: {}", path_config.id, e);
+                            log::warn!("Failed to cache XPUB for {}: {}", cached_path.path_id, e);
                         } else {
                             count += 1;
-                            log::debug!("💰 Cached XPUB for {}: {}", path_config.id, account_path_str);
+                            log::debug!("💰 Cached XPUB for {}: {}", cached_path.path_id, account_path_str);
                         }
                     }
                 }
                 Err(e) => {
-                    log::debug!("Failed to get XPUB for {}: {}", path_config.id, e);
+                    log::debug!("Failed to get XPUB for {}: {}", cached_path.path_id, e);
                 }
             }
             
             // 2. Get address at master level (m/44'/0'/0'/0/0)
             let address_request = DeviceRequest::GetAddress {
                 path: master_path_str.clone(),
-                coin_name: path_config.blockchain.clone(),
-                script_type: Some(path_config.script_type.clone()),
-                show_display: Some(path_config.show_display),
+                coin_name: cached_path.blockchain.clone(),
+                script_type: cached_path.script_type.clone(),
+                show_display: Some(cached_path.show_display),
             };
             
             match self.send_device_request(queue_handle, address_request).await {
@@ -278,55 +281,55 @@ impl FrontloadController {
                     if let Some(cached) = super::types::CachedPubkey::from_device_response(
                         device_id,
                         &master_path_str,
-                        &path_config.blockchain,
-                        Some(&path_config.script_type),
+                        &cached_path.blockchain,
+                        cached_path.script_type.as_deref(),
                         &response,
                     ) {
                         if let Err(e) = self.cache.save_pubkey(&cached).await {
-                            log::warn!("Failed to cache address for {}: {}", path_config.id, e);
+                            log::warn!("Failed to cache address for {}: {}", cached_path.path_id, e);
                         } else {
                             count += 1;
-                            log::debug!("🏠 Cached address for {}: {}", path_config.id, master_path_str);
+                            log::debug!("🏠 Cached address for {}: {}", cached_path.path_id, master_path_str);
                         }
                     }
                 }
                 Err(e) => {
-                    log::debug!("Failed to get address for {}: {}", path_config.id, e);
+                    log::debug!("Failed to get address for {}: {}", cached_path.path_id, e);
                 }
             }
         } else {
             // For other blockchains, use appropriate address request
-            let request = match path_config.blockchain.as_str() {
+            let request = match cached_path.blockchain.as_str() {
                 "ethereum" | "arbitrum" | "optimism" | "polygon" | "avalanche" | "base" | "bsc" => {
                     DeviceRequest::EthereumGetAddress {
                         path: master_path_str.clone(),
-                        show_display: Some(path_config.show_display),
+                        show_display: Some(cached_path.show_display),
                     }
                 },
                 "cosmos" => DeviceRequest::CosmosGetAddress {
                     path: master_path_str.clone(),
                     hrp: "cosmos".to_string(),
-                    show_display: Some(path_config.show_display),
+                    show_display: Some(cached_path.show_display),
                 },
                 "osmosis" => DeviceRequest::OsmosisGetAddress {
                     path: master_path_str.clone(),
-                    show_display: Some(path_config.show_display),
+                    show_display: Some(cached_path.show_display),
                 },
                 "thorchain" => DeviceRequest::ThorchainGetAddress {
                     path: master_path_str.clone(),
                     testnet: false,
-                    show_display: Some(path_config.show_display),
+                    show_display: Some(cached_path.show_display),
                 },
                 "mayachain" => DeviceRequest::MayachainGetAddress {
                     path: master_path_str.clone(),
-                    show_display: Some(path_config.show_display),
+                    show_display: Some(cached_path.show_display),
                 },
                 "ripple" => DeviceRequest::XrpGetAddress {
                     path: master_path_str.clone(),
-                    show_display: Some(path_config.show_display),
+                    show_display: Some(cached_path.show_display),
                 },
                 _ => {
-                    log::debug!("Unsupported blockchain for frontload: {}", path_config.blockchain);
+                    log::debug!("Unsupported blockchain for frontload: {}", cached_path.blockchain);
                     return Ok(0);
                 }
             };
@@ -336,20 +339,20 @@ impl FrontloadController {
                     if let Some(cached) = super::types::CachedPubkey::from_device_response(
                         device_id,
                         &master_path_str,
-                        &path_config.blockchain,
-                        Some(&path_config.script_type),
+                        &cached_path.blockchain,
+                        cached_path.script_type.as_deref(),
                         &response,
                     ) {
                         if let Err(e) = self.cache.save_pubkey(&cached).await {
-                            log::warn!("Failed to cache {} address for {}: {}", path_config.blockchain, path_config.id, e);
+                            log::warn!("Failed to cache {} address for {}: {}", cached_path.blockchain, cached_path.path_id, e);
                         } else {
                             count += 1;
-                            log::debug!("🏠 Cached {} address for {}: {}", path_config.blockchain, path_config.id, master_path_str);
+                            log::debug!("🏠 Cached {} address for {}: {}", cached_path.blockchain, cached_path.path_id, master_path_str);
                         }
                     }
                 }
                 Err(e) => {
-                    log::debug!("Failed to get {} address for {}: {}", path_config.blockchain, path_config.id, e);
+                    log::debug!("Failed to get {} address for {}: {}", cached_path.blockchain, cached_path.path_id, e);
                 }
             }
         }
@@ -397,5 +400,236 @@ impl FrontloadController {
         }?;
         
         Ok(response)
+    }
+
+    /// Fetch and cache portfolio data for a device using collected xpubs
+    async fn frontload_portfolio_data(&self, device_id: &str) -> Result<usize> {
+        // Check if Pioneer API client is available
+        let pioneer_client = match &self.pioneer_client {
+            Some(client) => client,
+            None => {
+                log::info!("📊 Skipping portfolio fetch - Pioneer API not configured");
+                return Ok(0);
+            }
+        };
+
+        // Collect all xpubs for this device
+        let xpubs = self.collect_device_xpubs(device_id).await?;
+        if xpubs.is_empty() {
+            log::warn!("No xpubs found for device {}, skipping portfolio fetch", device_id);
+            return Ok(0);
+        }
+
+        log::info!("💰 Fetching portfolio data for {} xpubs...", xpubs.len());
+
+        // Update progress to 75%
+        if let Some(mut metadata) = self.cache.get_cache_metadata(device_id).await {
+            metadata.frontload_progress = 75;
+            let _ = self.cache.update_cache_metadata(&metadata).await;
+        }
+
+        // Create portfolio requests with proper CAIP construction
+        let mut portfolio_requests = Vec::new();
+        for (xpub, blockchain) in &xpubs {
+            // Build proper CAIP based on blockchain and cached asset data
+            if let Some(caip) = self.build_caip_for_xpub(blockchain).await {
+                portfolio_requests.push(PortfolioRequest {
+                    caip,
+                    pubkey: xpub.clone(),
+                });
+            } else {
+                log::warn!("⚠️ No CAIP mapping found for blockchain: {}", blockchain);
+            }
+        }
+
+        // Fetch portfolio balances
+        match pioneer_client.get_portfolio_balances(portfolio_requests).await {
+            Ok(portfolio_balances) => {
+                log::info!("📈 Received {} balance entries from Pioneer API", portfolio_balances.len());
+
+                // Update progress to 85%
+                if let Some(mut metadata) = self.cache.get_cache_metadata(device_id).await {
+                    metadata.frontload_progress = 85;
+                    let _ = self.cache.update_cache_metadata(&metadata).await;
+                }
+
+                // Save portfolio balances to cache with pubkey linkage
+                let mut saved_count = 0;
+                for balance in &portfolio_balances {
+                    // Try to find the specific pubkey that generated this balance
+                    let matching_pubkey = self.find_pubkey_for_balance(device_id, balance).await;
+                    match self.cache.save_portfolio_balance_with_pubkey(
+                        balance, 
+                        device_id, 
+                        matching_pubkey.as_deref()
+                    ).await {
+                        Ok(_) => saved_count += 1,
+                        Err(e) => log::warn!("Failed to save balance for {}: {}", balance.ticker, e),
+                    }
+                }
+
+                // Update progress to 90%
+                if let Some(mut metadata) = self.cache.get_cache_metadata(device_id).await {
+                    metadata.frontload_progress = 90;
+                    let _ = self.cache.update_cache_metadata(&metadata).await;
+                }
+
+                // Fetch and cache staking positions if we have any cosmos/osmosis addresses
+                if let Some(staking_positions) = self.fetch_staking_positions(pioneer_client, &xpubs).await? {
+                    log::info!("🥩 Received {} staking positions", staking_positions.len());
+                    for (network_id, positions) in staking_positions {
+                        for position in positions {
+                            // Convert staking position to portfolio balance format
+                            if let Some(balance) = self.staking_position_to_balance(&position, &network_id) {
+                                if let Err(e) = self.cache.save_portfolio_balance(&balance, device_id).await {
+                                    log::warn!("Failed to save staking position for validator {}: {}", position.validator, e);
+                                } else {
+                                    saved_count += 1;
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Update progress to 95%
+                if let Some(mut metadata) = self.cache.get_cache_metadata(device_id).await {
+                    metadata.frontload_progress = 95;
+                    let _ = self.cache.update_cache_metadata(&metadata).await;
+                }
+
+                // Build and cache dashboard data
+                if let Err(e) = self.build_and_cache_dashboard(device_id, pioneer_client, &xpubs).await {
+                    log::warn!("Failed to build dashboard cache: {}", e);
+                }
+
+                log::info!("💾 Successfully cached {} portfolio entries", saved_count);
+                Ok(saved_count)
+            }
+            Err(e) => {
+                log::error!("❌ Failed to fetch portfolio from Pioneer API: {}", e);
+                Err(e)
+            }
+        }
+    }
+
+    /// Collect all xpubs for a device from the cache with blockchain info
+    async fn collect_device_xpubs(&self, device_id: &str) -> Result<Vec<(String, String)>> {
+        let db = self.cache.db.lock().await;
+        
+        let mut stmt = db.prepare(
+            "SELECT DISTINCT xpub, coin_name FROM cached_pubkeys 
+             WHERE device_id = ?1 AND xpub IS NOT NULL AND xpub != ''"
+        )?;
+        
+        let xpubs = stmt.query_map([device_id], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+        
+        Ok(xpubs)
+    }
+
+    /// Build CAIP for a blockchain using cached asset data
+    async fn build_caip_for_xpub(&self, blockchain: &str) -> Option<String> {
+        // Get the primary network for this blockchain from cached assets
+        match self.cache.get_blockchain_assets(blockchain).await {
+            Ok(assets) => {
+                // Find the native asset for this blockchain
+                if let Some(native_asset) = assets.iter().find(|a| a.is_native) {
+                    Some(native_asset.caip.clone())
+                } else if !assets.is_empty() {
+                    // Fallback to first asset if no native found
+                    Some(assets[0].caip.clone())
+                } else {
+                    log::warn!("No assets found for blockchain: {}", blockchain);
+                    None
+                }
+            }
+            Err(e) => {
+                log::warn!("Failed to get assets for blockchain {}: {}", blockchain, e);
+                None
+            }
+        }
+    }
+
+    /// Fetch staking positions for cosmos-based chains
+    async fn fetch_staking_positions(&self, client: &PioneerClient, xpubs: &[(String, String)]) -> Result<Option<std::collections::HashMap<String, Vec<crate::pioneer_api::StakingPosition>>>> {
+        // For demo purposes, try to fetch staking for Cosmos and Osmosis
+        let networks = ["cosmos:cosmoshub-4", "cosmos:osmosis-1"];
+        let mut all_positions = std::collections::HashMap::new();
+
+        for network_id in networks {
+            // In production, we'd derive cosmos addresses from xpubs
+            // For now, using placeholder addresses
+            let placeholder_address = "cosmos1placeholder";
+            
+            match client.get_staking_positions(network_id, placeholder_address).await {
+                Ok(positions) => {
+                    if !positions.is_empty() {
+                        all_positions.insert(network_id.to_string(), positions);
+                    }
+                }
+                Err(e) => {
+                    log::debug!("No staking positions for {}: {}", network_id, e);
+                }
+            }
+        }
+
+        if all_positions.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(all_positions))
+        }
+    }
+
+    /// Convert staking position to portfolio balance format
+    fn staking_position_to_balance(&self, position: &crate::pioneer_api::StakingPosition, network_id: &str) -> Option<crate::pioneer_api::PortfolioBalance> {
+        // Derive CAIP and ticker from network
+        let (caip, ticker) = match network_id {
+            "cosmos:cosmoshub-4" => ("cosmos:cosmoshub-4/slip44:118".to_string(), "ATOM".to_string()),
+            "cosmos:osmosis-1" => ("cosmos:osmosis-1/slip44:118".to_string(), "OSMO".to_string()),
+            _ => return None,
+        };
+
+        Some(crate::pioneer_api::PortfolioBalance {
+            caip,
+            ticker: ticker.clone(),
+            balance: position.amount.clone(),
+            value_usd: "0".to_string(), // Would be calculated from price * amount
+            price_usd: Some("0".to_string()), // Would need price lookup
+            network_id: network_id.to_string(),
+            address: None,
+            balance_type: Some("staking".to_string()),
+            name: Some(format!("Staked {}", ticker)),
+            icon: None,
+            precision: Some(6), // Standard cosmos precision
+            contract: None,
+            validator: Some(position.validator.clone()),
+            unbonding_end: position.unbonding_end,
+            rewards_available: Some(position.rewards.clone()),
+        })
+    }
+
+    /// Build and cache dashboard data
+    async fn build_and_cache_dashboard(&self, device_id: &str, client: &PioneerClient, xpubs: &[(String, String)]) -> Result<()> {
+        let xpub_refs: Vec<&str> = xpubs.iter().map(|(s, _)| s.as_str()).collect();
+        match client.build_portfolio(xpub_refs).await {
+            Ok(dashboard) => {
+                if let Err(e) = self.cache.update_dashboard(device_id, &dashboard).await {
+                    log::warn!("Failed to cache dashboard for device {}: {}", device_id, e);
+                }
+                Ok(())
+            }
+            Err(e) => {
+                log::warn!("Failed to build portfolio dashboard: {}", e);
+                Err(e)
+            }
+        }
+    }
+
+    /// Find the pubkey that corresponds to a specific balance
+    async fn find_pubkey_for_balance(&self, device_id: &str, balance: &crate::pioneer_api::PortfolioBalance) -> Option<String> {
+        // Use the cache manager's method to find matching pubkey
+        self.cache.find_matching_pubkey(device_id, &balance.network_id, balance.address.as_deref()).await
     }
 } 

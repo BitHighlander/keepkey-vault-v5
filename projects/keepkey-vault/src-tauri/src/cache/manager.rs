@@ -6,7 +6,7 @@ use super::types::{CachedPubkey, CacheMetadata, CacheStatus, FrontloadStatus};
 
 /// Thread-safe cache manager for SQLite operations
 pub struct CacheManager {
-    db: Arc<Mutex<Connection>>,
+    pub(crate) db: Arc<Mutex<Connection>>,
     stats: Arc<Mutex<CacheStats>>,
 }
 
@@ -29,10 +29,22 @@ impl CacheManager {
         // Apply migrations
         Self::apply_migrations(&conn)?;
         
-        Ok(Self {
+        let cache_manager = Self {
             db: Arc::new(Mutex::new(conn)),
             stats: Arc::new(Mutex::new(CacheStats::default())),
-        })
+        };
+        
+        // Initialize asset cache from JSON data if not already done
+        if !cache_manager.is_cache_initialized().await? {
+            log::info!("🌱 First-time cache initialization - loading asset data...");
+            cache_manager.init_from_json_data().await?;
+        } else {
+            let stats = cache_manager.get_cache_stats().await?;
+            log::info!("✅ Cache already initialized: {} assets, {} paths", 
+                stats.0, stats.1);
+        }
+        
+        Ok(cache_manager)
     }
     
     /// Get the database path
@@ -50,8 +62,17 @@ impl CacheManager {
     fn apply_migrations(conn: &Connection) -> Result<()> {
         // For now, just execute the migration SQL directly
         // In a production system, you'd track which migrations have been applied
-        let migration_sql = include_str!("sql/004_cache_tables.sql");
-        conn.execute_batch(migration_sql)?;
+        let migration_004 = include_str!("sql/004_cache_tables.sql");
+        conn.execute_batch(migration_004)?;
+        
+        // Apply portfolio tables migration
+        let migration_005 = include_str!("sql/005_portfolio_tables.sql");
+        conn.execute_batch(migration_005)?;
+        
+        // Apply asset and path tables migration
+        let migration_006 = include_str!("sql/006_asset_and_path_tables.sql");
+        conn.execute_batch(migration_006)?;
+        
         Ok(())
     }
     

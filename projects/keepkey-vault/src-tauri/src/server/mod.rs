@@ -58,6 +58,8 @@ pub struct ServerState {
         api::transactions::eth_sign_transaction,
         api::transactions::eth_sign_message,
         api::transactions::cosmos_sign_amino,
+        api::portfolio::get_combined_portfolio,
+        api::portfolio::get_device_portfolio,
     ),
     components(
         schemas(
@@ -95,6 +97,12 @@ pub struct ServerState {
             api::transactions::CosmosSignAminoResponse,
             crate::commands::BitcoinUtxoInput,
             crate::commands::BitcoinUtxoOutput,
+            api::portfolio::PortfolioQuery,
+            api::portfolio::PortfolioResponse,
+            crate::pioneer_api::PortfolioBalance,
+            crate::pioneer_api::Dashboard,
+            crate::pioneer_api::NetworkSummary,
+            crate::pioneer_api::AssetSummary,
         )
     ),
     tags(
@@ -103,7 +111,8 @@ pub struct ServerState {
         (name = "mcp", description = "Model Context Protocol endpoints"),
         (name = "auth", description = "Authentication and pairing endpoints"),
         (name = "addresses", description = "Address generation endpoints"),
-        (name = "Transaction", description = "Transaction signing endpoints")
+        (name = "Transaction", description = "Transaction signing endpoints"),
+        (name = "portfolio", description = "Portfolio management endpoints")
     ),
     info(
         title = "KeepKey Vault API",
@@ -187,6 +196,10 @@ pub async fn start_server(device_queue_manager: crate::commands::DeviceQueueMana
         .route("/eth/signTransaction", post(api::transactions::eth_sign_transaction))
         .route("/eth/sign", post(api::transactions::eth_sign_message))
         .route("/cosmos/sign-amino", post(api::transactions::cosmos_sign_amino))
+        
+        // Portfolio endpoints
+        .route("/api/portfolio", get(api::portfolio::get_combined_portfolio))
+        .route("/api/portfolio/:device_id", get(api::portfolio::get_device_portfolio))
         
         // Merge swagger UI first
         .merge(swagger_ui)

@@ -10,6 +10,7 @@ mod logging;
 mod slip132;
 mod server;
 mod cache;
+mod pioneer_api;
 
 // Re-export commonly used types
 

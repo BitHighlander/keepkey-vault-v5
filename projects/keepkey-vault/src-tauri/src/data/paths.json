@@ -1,0 +1,621 @@
+{
+  "arbitrum": [
+    {
+      "id": "arbitrum_account_0",
+      "note": "Arbitrum account 0 (ETH path)",
+      "blockchain": "arbitrum",
+      "symbol": "ARB",
+      "networks": [
+        "eip155:42161"
+      ],
+      "script_type": "ethereum",
+      "addressNList": [
+        2147483692,
+        2147483708,
+        2147483648
+      ],
+      "addressNListMaster": [
+        2147483692,
+        2147483708,
+        2147483648,
+        0,
+        0
+      ],
+      "curve": "secp256k1",
+      "showDisplay": false
+    }
+  ],
+  "avalanche": [
+    {
+      "id": "avalanche_account_0",
+      "note": "Avalanche C-Chain account 0 (ETH path)",
+      "blockchain": "avalanche",
+      "symbol": "AVAX",
+      "networks": [
+        "eip155:43114"
+      ],
+      "script_type": "ethereum",
+      "addressNList": [
+        2147483692,
+        2147483708,
+        2147483648
+      ],
+      "addressNListMaster": [
+        2147483692,
+        2147483708,
+        2147483648,
+        0,
+        0
+      ],
+      "curve": "secp256k1",
+      "showDisplay": false
+    }
+  ],
+  "base": [
+    {
+      "id": "base_account_0",
+      "note": "Base account 0 (ETH path)",
+      "blockchain": "base",
+      "symbol": "BASE",
+      "networks": [
+        "eip155:8453"
+      ],
+      "script_type": "ethereum",
+      "addressNList": [
+        2147483692,
+        2147483708,
+        2147483648
+      ],
+      "addressNListMaster": [
+        2147483692,
+        2147483708,
+        2147483648,
+        0,
+        0
+      ],
+      "curve": "secp256k1",
+      "showDisplay": false
+    }
+  ],
+  "bitcoin": [
+    {
+      "id": "bitcoin_legacy_account_0",
+      "note": "Bitcoin account 0 legacy (p2pkh)",
+      "blockchain": "bitcoin",
+      "symbol": "BTC",
+      "networks": [
+        "bip122:000000000019d6689c085ae165831e93"
+      ],
+      "script_type": "p2pkh",
+      "addressNList": [
+        2147483692,
+        2147483648,
+        2147483648
+      ],
+      "addressNListMaster": [
+        2147483692,
+        2147483648,
+        2147483648,
+        0,
+        0
+      ],
+      "curve": "secp256k1",
+      "showDisplay": false
+    },
+    {
+      "id": "bitcoin_segwit_p2sh_account_0",
+      "note": "Bitcoin account 0 segwit (p2sh-p2wpkh) BIP49",
+      "blockchain": "bitcoin",
+      "symbol": "BTC",
+      "networks": [
+        "bip122:000000000019d6689c085ae165831e93"
+      ],
+      "script_type": "p2sh-p2wpkh",
+      "addressNList": [
+        2147483697,
+        2147483648,
+        2147483648
+      ],
+      "addressNListMaster": [
+        2147483697,
+        2147483648,
+        2147483648,
+        0,
+        0
+      ],
+      "curve": "secp256k1",
+      "showDisplay": false
+    },
+    {
+      "id": "bitcoin_native_segwit_account_0",
+      "note": "Bitcoin account 0 Native Segwit (Bech32) BIP84",
+      "blockchain": "bitcoin",
+      "symbol": "BTC",
+      "networks": [
+        "bip122:000000000019d6689c085ae165831e93"
+      ],
+      "script_type": "p2wpkh",
+      "addressNList": [
+        2147483732,
+        2147483648,
+        2147483648
+      ],
+      "addressNListMaster": [
+        2147483732,
+        2147483648,
+        2147483648,
+        0,
+        0
+      ],
+      "curve": "secp256k1",
+      "showDisplay": false
+    },
+    {
+      "id": "bitcoin_legacy_account_1",
+      "note": "Bitcoin account 1 legacy (p2pkh)",
+      "blockchain": "bitcoin",
+      "symbol": "BTC",
+      "networks": [
+        "bip122:000000000019d6689c085ae165831e93"
+      ],
+      "script_type": "p2pkh",
+      "addressNList": [
+        2147483692,
+        2147483648,
+        2147483649
+      ],
+      "addressNListMaster": [
+        2147483692,
+        2147483648,
+        2147483649,
+        0,
+        0
+      ],
+      "curve": "secp256k1",
+      "showDisplay": false
+    },
+    {
+      "id": "bitcoin_segwit_p2sh_account_1",
+      "note": "Bitcoin account 1 segwit (p2sh-p2wpkh) BIP49",
+      "blockchain": "bitcoin",
+      "symbol": "BTC",
+      "networks": [
+        "bip122:000000000019d6689c085ae165831e93"
+      ],
+      "script_type": "p2sh-p2wpkh",
+      "addressNList": [
+        2147483697,
+        2147483648,
+        2147483649
+      ],
+      "addressNListMaster": [
+        2147483697,
+        2147483648,
+        2147483649,
+        0,
+        0
+      ],
+      "curve": "secp256k1",
+      "showDisplay": false
+    },
+    {
+      "id": "bitcoin_native_segwit_account_1",
+      "note": "Bitcoin account 1 Native Segwit (Bech32)",
+      "blockchain": "bitcoin",
+      "symbol": "BTC",
+      "networks": [
+        "bip122:000000000019d6689c085ae165831e93"
+      ],
+      "script_type": "p2wpkh",
+      "addressNList": [
+        2147483732,
+        2147483648,
+        2147483649
+      ],
+      "addressNListMaster": [
+        2147483732,
+        2147483648,
+        2147483649,
+        0,
+        0
+      ],
+      "curve": "secp256k1",
+      "showDisplay": false
+    },
+    {
+      "id": "bitcoin_testnet_account_0",
+      "note": "Bitcoin Testnet account 0",
+      "blockchain": "bitcoin",
+      "symbol": "TEST",
+      "networks": [
+        "bip122:000000000933ea01ad0ee984209779ba"
+      ],
+      "script_type": "p2pkh",
+      "addressNList": [
+        2147483649,
+        2147483648,
+        2147483648
+      ],
+      "addressNListMaster": [
+        2147483649,
+        2147483648,
+        2147483648,
+        0,
+        0
+      ],
+      "curve": "secp256k1",
+      "showDisplay": false
+    }
+  ],
+  "bitcoincash": [
+    {
+      "id": "bitcoin_cash_account_0",
+      "note": "Bitcoin Cash account 0 (p2pkh)",
+      "blockchain": "bitcoincash",
+      "symbol": "BCH",
+      "networks": [
+        "bip122:000000000000000000651ef99cb9fcbe"
+      ],
+      "script_type": "p2pkh",
+      "addressNList": [
+        2147483692,
+        2147483793,
+        2147483648
+      ],
+      "addressNListMaster": [
+        2147483692,
+        2147483793,
+        2147483648,
+        0,
+        0
+      ],
+      "curve": "secp256k1",
+      "showDisplay": false
+    }
+  ],
+  "bsc": [
+    {
+      "id": "bsc_account_0",
+      "note": "Binance Smart Chain account 0 (ETH path)",
+      "blockchain": "bsc",
+      "symbol": "BSC",
+      "networks": [
+        "eip155:56"
+      ],
+      "script_type": "ethereum",
+      "addressNList": [
+        2147483692,
+        2147483708,
+        2147483648
+      ],
+      "addressNListMaster": [
+        2147483692,
+        2147483708,
+        2147483648,
+        0,
+        0
+      ],
+      "curve": "secp256k1",
+      "showDisplay": false
+    }
+  ],
+  "cosmos": [
+    {
+      "id": "cosmos_account_0",
+      "note": "Cosmos (ATOM) account 0",
+      "blockchain": "cosmos",
+      "symbol": "ATOM",
+      "networks": [
+        "cosmos:cosmoshub-4"
+      ],
+      "script_type": "cosmos",
+      "addressNList": [
+        2147483692,
+        2147483766,
+        2147483648,
+        0,
+        0
+      ],
+      "addressNListMaster": [
+        2147483692,
+        2147483766,
+        2147483648,
+        0,
+        0
+      ],
+      "curve": "secp256k1",
+      "showDisplay": false
+    }
+  ],
+  "dash": [
+    {
+      "id": "dash_account_0",
+      "note": "Dash account 0 (p2pkh)",
+      "blockchain": "dash",
+      "symbol": "DASH",
+      "networks": [
+        "bip122:000007d91d1254d60e2dd1ae58038307"
+      ],
+      "script_type": "p2pkh",
+      "addressNList": [
+        2147483692,
+        2147483653,
+        2147483648
+      ],
+      "addressNListMaster": [
+        2147483692,
+        2147483653,
+        2147483648,
+        0,
+        0
+      ],
+      "curve": "secp256k1",
+      "showDisplay": false
+    }
+  ],
+  "dogecoin": [
+    {
+      "id": "dogecoin_account_0",
+      "note": "Dogecoin account 0 (p2pkh)",
+      "blockchain": "dogecoin",
+      "symbol": "DOGE",
+      "networks": [
+        "bip122:00000000001a91e3dace36e2be3bf030"
+      ],
+      "script_type": "p2pkh",
+      "addressNList": [
+        2147483692,
+        2147483651,
+        2147483648
+      ],
+      "addressNListMaster": [
+        2147483692,
+        2147483651,
+        2147483648,
+        0,
+        0
+      ],
+      "curve": "secp256k1",
+      "showDisplay": false
+    }
+  ],
+  "ethereum": [
+    {
+      "id": "ethereum_account_0",
+      "note": "Ethereum account 0 (default ETH path)",
+      "blockchain": "ethereum",
+      "symbol": "ETH",
+      "networks": [
+        "eip155:1",
+        "eip155:*"
+      ],
+      "script_type": "ethereum",
+      "addressNList": [
+        2147483692,
+        2147483708,
+        2147483648
+      ],
+      "addressNListMaster": [
+        2147483692,
+        2147483708,
+        2147483648,
+        0,
+        0
+      ],
+      "curve": "secp256k1",
+      "showDisplay": false
+    }
+  ],
+  "litecoin": [
+    {
+      "id": "litecoin_legacy_account_0",
+      "note": "Litecoin account 0 legacy (p2pkh)",
+      "blockchain": "litecoin",
+      "symbol": "LTC",
+      "networks": [
+        "bip122:12a765e31ffd4059bada1e25190f6e98"
+      ],
+      "script_type": "p2pkh",
+      "addressNList": [
+        2147483692,
+        2147483650,
+        2147483648
+      ],
+      "addressNListMaster": [
+        2147483692,
+        2147483650,
+        2147483648,
+        0,
+        0
+      ],
+      "curve": "secp256k1",
+      "showDisplay": false
+    },
+    {
+      "id": "litecoin_native_segwit_account_0",
+      "note": "Litecoin account 0 Native Segwit (Bech32)",
+      "blockchain": "litecoin",
+      "symbol": "LTC",
+      "networks": [
+        "bip122:12a765e31ffd4059bada1e25190f6e98"
+      ],
+      "script_type": "p2wpkh",
+      "addressNList": [
+        2147483732,
+        2147483650,
+        2147483648
+      ],
+      "addressNListMaster": [
+        2147483732,
+        2147483650,
+        2147483648,
+        0,
+        0
+      ],
+      "curve": "secp256k1",
+      "showDisplay": false
+    }
+  ],
+  "mayachain": [
+    {
+      "id": "maya_account_0",
+      "note": "Maya (CACAO) account 0",
+      "blockchain": "mayachain",
+      "symbol": "CACAO",
+      "networks": [
+        "cosmos:mayachain-mainnet-v1"
+      ],
+      "script_type": "mayachain",
+      "addressNList": [
+        2147483692,
+        2147484579,
+        2147483648,
+        0,
+        0
+      ],
+      "addressNListMaster": [
+        2147483692,
+        2147484579,
+        2147483648,
+        0,
+        0
+      ],
+      "curve": "secp256k1",
+      "showDisplay": false
+    }
+  ],
+  "optimism": [
+    {
+      "id": "optimism_account_0",
+      "note": "Optimism account 0 (ETH path)",
+      "blockchain": "optimism",
+      "symbol": "OP",
+      "networks": [
+        "eip155:10"
+      ],
+      "script_type": "ethereum",
+      "addressNList": [
+        2147483692,
+        2147483708,
+        2147483648
+      ],
+      "addressNListMaster": [
+        2147483692,
+        2147483708,
+        2147483648,
+        0,
+        0
+      ],
+      "curve": "secp256k1",
+      "showDisplay": false
+    }
+  ],
+  "osmosis": [
+    {
+      "id": "osmosis_account_0",
+      "note": "Osmosis (OSMO) account 0",
+      "blockchain": "osmosis",
+      "symbol": "OSMO",
+      "networks": [
+        "cosmos:osmosis-1"
+      ],
+      "script_type": "bech32",
+      "addressNList": [
+        2147483692,
+        2147483766,
+        2147483648,
+        0,
+        0
+      ],
+      "addressNListMaster": [
+        2147483692,
+        2147483766,
+        2147483648,
+        0,
+        0
+      ],
+      "curve": "secp256k1",
+      "showDisplay": false
+    }
+  ],
+  "polygon": [
+    {
+      "id": "polygon_account_0",
+      "note": "Polygon/Matic account 0 (ETH path)",
+      "blockchain": "polygon",
+      "symbol": "MATIC",
+      "networks": [
+        "eip155:137"
+      ],
+      "script_type": "ethereum",
+      "addressNList": [
+        2147483692,
+        2147483708,
+        2147483648
+      ],
+      "addressNListMaster": [
+        2147483692,
+        2147483708,
+        2147483648,
+        0,
+        0
+      ],
+      "curve": "secp256k1",
+      "showDisplay": false
+    }
+  ],
+  "ripple": [
+    {
+      "id": "ripple_account_0",
+      "note": "Ripple (XRP) account 0",
+      "blockchain": "ripple",
+      "symbol": "XRP",
+      "networks": [
+        "ripple:4109c6f2045fc7eff4cde8f9905d19c2"
+      ],
+      "script_type": "ripple",
+      "addressNList": [
+        2147483692,
+        2147483792,
+        2147483648
+      ],
+      "addressNListMaster": [
+        2147483692,
+        2147483792,
+        2147483648,
+        0,
+        0
+      ],
+      "curve": "secp256k1",
+      "showDisplay": false
+    }
+  ],
+  "thorchain": [
+    {
+      "id": "thorchain_account_0",
+      "note": "Thorchain (RUNE) account 0",
+      "blockchain": "thorchain",
+      "symbol": "RUNE",
+      "networks": [
+        "cosmos:thorchain-mainnet-v1"
+      ],
+      "script_type": "thorchain",
+      "addressNList": [
+        2147483692,
+        2147484579,
+        2147483648,
+        0,
+        0
+      ],
+      "addressNListMaster": [
+        2147483692,
+        2147484579,
+        2147483648,
+        0,
+        0
+      ],
+      "curve": "secp256k1",
+      "showDisplay": false
+    }
+  ]
+}
