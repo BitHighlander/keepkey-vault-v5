@@ -6,7 +6,7 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
 use tracing::{info, error, warn};
 use utoipa::ToSchema;
 
@@ -148,65 +148,66 @@ pub async fn api_list_devices(State(state): State<Arc<ServerState>>) -> Result<J
     let queue_manager = &state.device_queue_manager;
     
     for device in devices {
-        // For each device, try to get features through the queue
-        let queue_handle = {
-            let mut manager = queue_manager.lock().await;
-            
-            if let Some(handle) = manager.get(&device.unique_id) {
-                handle.clone()
-            } else {
-                // Spawn a new device worker if not exists
-                let handle = keepkey_rust::device_queue::DeviceQueueFactory::spawn_worker(
-                    device.unique_id.clone(), 
-                    device.clone()
-                );
-                manager.insert(device.unique_id.clone(), handle.clone());
-                handle
-            }
-        };
-        
-        // Try to get features through the queue (non-blocking, with timeout)
-        let keepkey_info = match tokio::time::timeout(
-            std::time::Duration::from_millis(500),
-            queue_handle.get_features()
-        ).await {
-            Ok(Ok(raw_features)) => {
-                let features = crate::commands::convert_features_to_device_features(raw_features);
-                Some(KeepKeyInfo {
-                    label: features.label.clone(),
-                    device_id: features.device_id.clone(),
-                    firmware_version: features.version.clone(),
-                    revision: features.firmware_hash.clone(),
-                    bootloader_hash: features.bootloader_hash.clone(),
-                    bootloader_version: None,
-                    initialized: features.initialized,
-                    bootloader_mode: features.bootloader_mode,
-                })
-            }
-            Ok(Err(e)) => {
-                warn!("Failed to get features for device {} through queue: {}", device.unique_id, e);
-                None
-            }
-            Err(_) => {
-                warn!("Timeout getting features for device {}", device.unique_id);
-                None
-            }
-        };
-        
-        device_infos.push(DeviceInfo {
-            device_id: device.unique_id,
-            name: device.name,
+        // Create basic device info immediately without blocking on GetFeatures
+        let basic_device_info = DeviceInfo {
+            device_id: device.unique_id.clone(),
+            name: device.name.clone(),
             vendor_id: device.vid,
             product_id: device.pid,
-            manufacturer: device.manufacturer,
-            product: device.product,
-            serial_number: device.serial_number,
+            manufacturer: device.manufacturer.clone(),
+            product: device.product.clone(),
+            serial_number: device.serial_number.clone(),
             is_keepkey: device.is_keepkey,
-            keepkey_info,
+            keepkey_info: None, // Will be populated by background task
+        };
+        
+        device_infos.push(basic_device_info);
+        
+        // Spawn background task to get features asynchronously (non-blocking)
+        let device_id = device.unique_id.clone();
+        let queue_manager_clone = queue_manager.clone();
+        let device_clone = device.clone();
+        
+        tokio::spawn(async move {
+            // Get or create device queue handle in background
+            let queue_handle = {
+                let mut manager = queue_manager_clone.lock().await;
+                
+                if let Some(handle) = manager.get(&device_id) {
+                    handle.clone()
+                } else {
+                    // Spawn a new device worker if not exists
+                    let handle = keepkey_rust::device_queue::DeviceQueueFactory::spawn_worker(
+                        device_id.clone(), 
+                        device_clone.clone()
+                    );
+                    manager.insert(device_id.clone(), handle.clone());
+                    handle
+                }
+            };
+            
+            // Try to get features in background (non-blocking for API response)
+            match tokio::time::timeout(std::time::Duration::from_secs(5), queue_handle.get_features()).await {
+                Ok(Ok(features)) => {
+                    log::info!("📋 Background GetFeatures completed for device {}: {} v{}.{}.{}", 
+                        device_id,
+                        features.model.as_deref().unwrap_or("Unknown"),
+                        features.major_version.unwrap_or(0),
+                        features.minor_version.unwrap_or(0),
+                        features.patch_version.unwrap_or(0)
+                    );
+                    // Features are now cached and available for future requests
+                }
+                Ok(Err(e)) => {
+                    log::warn!("⚠️ Background GetFeatures failed for device {}: {}", device_id, e);
+                }
+                Err(_) => {
+                    log::warn!("⚠️ Background GetFeatures timeout for device {}", device_id);
+                }
+            }
         });
     }
     
-    info!("Found {} KeepKey device(s)", device_infos.len());
     Ok(Json(device_infos))
 }
 

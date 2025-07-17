@@ -24,6 +24,7 @@ export const DeviceUpdateManager = ({ onComplete }: DeviceUpdateManagerProps) =>
   const [isProcessing, setIsProcessing] = useState(false)
   const [connectedDeviceId, setConnectedDeviceId] = useState<string | null>(null)
   const [retryCount, setRetryCount] = useState(0)
+  const [hasCompletedOnce, setHasCompletedOnce] = useState(false)
   
   // Get device invalid state dialog hook
   const deviceInvalidStateDialog = useDeviceInvalidStateDialog()
@@ -135,13 +136,20 @@ export const DeviceUpdateManager = ({ onComplete }: DeviceUpdateManagerProps) =>
     } else {
       // Device is ready
       console.log('🔧 DeviceUpdateManager: Device is ready, no updates needed')
-      console.log('🔧 DeviceUpdateManager: Calling onComplete() - this will show VaultInterface')
-      setShowEnterBootloaderMode(false)
-      setShowBootloaderUpdate(false)
-      setShowFirmwareUpdate(false)
-      setShowWalletCreation(false)
-      setShowPinUnlock(false)
-      onComplete?.()
+      
+      // Prevent calling onComplete multiple times
+      if (!hasCompletedOnce) {
+        console.log('🔧 DeviceUpdateManager: Calling onComplete() - this will show VaultInterface')
+        setHasCompletedOnce(true)
+        setShowEnterBootloaderMode(false)
+        setShowBootloaderUpdate(false)
+        setShowFirmwareUpdate(false)
+        setShowWalletCreation(false)
+        setShowPinUnlock(false)
+        onComplete?.()
+      } else {
+        console.log('🔧 DeviceUpdateManager: Device ready but onComplete already called - skipping')
+      }
     }
   }
 
