@@ -13,7 +13,6 @@ import { useCommonDialogs } from './hooks/useCommonDialogs';
 import { DeviceUpdateManager } from './components/DeviceUpdateManager';
 import { useOnboardingState } from './hooks/useOnboardingState';
 import { VaultInterface } from './components/VaultInterface';
-import { useWallet } from './contexts/WalletContext';
 import { DialogProvider, useDialog } from './contexts/DialogContext'
 import { useTroubleshootingWizard } from './contexts/DialogContext'
 
@@ -86,40 +85,6 @@ function App() {
         const { showOnboarding, showError } = useCommonDialogs();
         const { shouldShowOnboarding, loading: onboardingLoading, clearCache } = useOnboardingState();
         const { hideAll, activeDialog, getQueue } = useDialog();
-        const { fetchedXpubs, portfolio, isSync, reinitialize } = useWallet();
-        
-        // Check wallet context state and sync with local state
-        useEffect(() => {
-            console.log('📱 [App] Wallet context state check:', {
-                portfolioPresent: !!portfolio,
-                fetchedXpubsLength: fetchedXpubs.length,
-                isSync,
-                currentLocalState: {
-                    loadingStatus,
-                    deviceConnected,
-                    deviceUpdateComplete
-                }
-            });
-            
-            // If wallet has xpubs and portfolio, ensure we show the vault
-            if (fetchedXpubs.length > 0 && portfolio) {
-                console.log('📱 [App] Wallet is ready with xpubs and portfolio, syncing local state');
-                
-                // Only update if not already set to avoid infinite loops
-                if (!deviceConnected) {
-                    console.log('📱 [App] Setting deviceConnected to true from wallet context');
-                    setDeviceConnected(true);
-                }
-                if (!deviceUpdateComplete) {
-                    console.log('📱 [App] Setting deviceUpdateComplete to true from wallet context');
-                    setDeviceUpdateComplete(true);
-                }
-                if (loadingStatus !== 'Device ready') {
-                    console.log('📱 [App] Setting loadingStatus to "Device ready" from wallet context');
-                    setLoadingStatus('Device ready');
-                }
-            }
-        }, [fetchedXpubs, portfolio, isSync, deviceConnected, deviceUpdateComplete, loadingStatus]);
         
         // Debug log active dialogs
         useEffect(() => {

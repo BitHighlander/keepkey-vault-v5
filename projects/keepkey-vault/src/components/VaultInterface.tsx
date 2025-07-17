@@ -6,13 +6,10 @@ import { invoke } from '@tauri-apps/api/core';
 import splashBg from '../assets/splash-bg.png';
 import { SettingsDialog } from './SettingsDialog';
 import { AppsView, BrowserView, PairingsView, VaultView, AssetView } from './views';
-import { WalletProvider, useWallet } from '../contexts/WalletContext';
-import Send from './Send';
-import Receive from './Receive';
 import { useDialog } from '../contexts/DialogContext';
 import { AppHeader } from './AppHeader';
 
-type ViewType = 'apps' | 'browser' | 'pairings' | 'vault' | 'assets' | 'send' | 'receive' | 'portfolio';
+type ViewType = 'apps' | 'browser' | 'pairings' | 'vault' | 'assets' | 'portfolio';
 
 interface NavItem {
   id: ViewType | 'settings' | 'support';
@@ -25,7 +22,6 @@ export const VaultInterface = () => {
   const [currentView, setCurrentView] = useState<ViewType>('browser');
   const { open: isSettingsOpen, onOpen: openSettings, onClose: closeSettings } = useDisclosure();
   const [isRecoveryWizardOpen, setIsRecoveryWizardOpen] = useState(false);
-  const { refreshPortfolio } = useWallet();
   const { hideAll } = useDialog();
 
   // Clear any stuck dialogs when component mounts
@@ -59,11 +55,6 @@ export const VaultInterface = () => {
           window.open('https://support.keepkey.com', '_blank');
         }
     }
-  };
-
-  // Function to navigate to send/receive from portfolio
-  const navigateToSendReceive = (action: 'send' | 'receive') => {
-    setCurrentView(action);
   };
 
   const navItems: NavItem[] = [
@@ -122,21 +113,17 @@ export const VaultInterface = () => {
       case 'apps':
         return <AppsView />;
       case 'vault':
-        return <VaultView onNavigate={navigateToSendReceive} />;
+        return <VaultView />;
       case 'assets':
         return <AssetView />;
       case 'browser':
         return <BrowserView />;
       case 'pairings':
         return <PairingsView />;
-      case 'send':
-        return <Send onBack={() => setCurrentView('vault')} />;
-      case 'receive':
-        return <Receive onBack={() => setCurrentView('vault')} />;
       case 'portfolio':
-        return <VaultView onNavigate={navigateToSendReceive} />;
+        return <VaultView />;
       default:
-        return <VaultView onNavigate={navigateToSendReceive} />;
+        return <VaultView />;
     }
   };
 
@@ -145,7 +132,6 @@ export const VaultInterface = () => {
   }, []);
 
   return (
-    <WalletProvider>
       <Box 
         height="100vh" 
         width="100vw" 
@@ -229,6 +215,5 @@ export const VaultInterface = () => {
         </Box>
       )}
       </Box>
-    </WalletProvider>
   );
 }; 

@@ -7,7 +7,6 @@ import { PinUnlockDialog } from './PinUnlockDialog'
 import type { DeviceStatus, DeviceFeatures } from '../types/device'
 import { listen } from '@tauri-apps/api/event'
 import { invoke } from '@tauri-apps/api/core'
-import { useWallet } from '../contexts/WalletContext'
 import { useDeviceInvalidStateDialog } from '../contexts/DialogContext'
 
 interface DeviceUpdateManagerProps {
@@ -25,9 +24,6 @@ export const DeviceUpdateManager = ({ onComplete }: DeviceUpdateManagerProps) =>
   const [isProcessing, setIsProcessing] = useState(false)
   const [connectedDeviceId, setConnectedDeviceId] = useState<string | null>(null)
   const [retryCount, setRetryCount] = useState(0)
-
-  // Get wallet context for portfolio loading
-  const { refreshPortfolio, fetchedXpubs } = useWallet()
   
   // Get device invalid state dialog hook
   const deviceInvalidStateDialog = useDeviceInvalidStateDialog()
@@ -416,19 +412,8 @@ export const DeviceUpdateManager = ({ onComplete }: DeviceUpdateManagerProps) =>
     })
     setShowPinUnlock(false)
     
-    // Automatically start portfolio loading after PIN unlock
-    try {
-      console.log('🔄 Auto-loading portfolio after PIN unlock...')
-      console.log(`📋 Current XPUBs in memory: ${fetchedXpubs.length}`)
-      
-      // Trigger portfolio refresh - this will automatically fetch XPUBs if needed
-      await refreshPortfolio()
-      console.log('✅ Portfolio loading initiated successfully')
-      
-    } catch (error) {
-      console.error('❌ Failed to auto-load portfolio after PIN unlock:', error)
-      // Don't block onComplete - user can manually refresh later
-    }
+    // Device is now ready - webview will handle wallet functionality
+    console.log('✅ Device ready after PIN unlock - webview will handle wallet operations')
     
     // Device should now be ready to use
     console.log('🔒 Calling onComplete after PIN unlock')
