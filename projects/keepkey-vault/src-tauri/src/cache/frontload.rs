@@ -51,9 +51,35 @@ impl FrontloadController {
     pub async fn frontload_device(&self, device_id: &str) -> Result<()> {
         log::info!("🔄 Starting cache-first frontload for device: {}", device_id);
         
-        // Get cached derivation paths instead of hardcoded JSON
-        let cached_paths = self.cache.get_all_paths().await
-            .map_err(|e| anyhow!("Failed to load cached paths: {}", e))?;
+        // Initialize cache if not already done
+        if !self.cache.is_cache_initialized().await.unwrap_or(false) {
+            log::info!("🌱 Initializing asset cache during frontload...");
+            self.cache.init_from_json_data().await
+                .map_err(|e| anyhow!("Failed to initialize cache: {}", e))?;
+        }
+        
+        // Get cached derivation paths, fallback to empty list if unavailable
+        let cached_paths = self.cache.get_all_paths().await.unwrap_or_else(|e| {
+            log::warn!("⚠️ Failed to load cached paths, using empty list: {}", e);
+            Vec::new()
+        });
+        
+        if cached_paths.is_empty() {
+            log::warn!("📋 No cached derivation paths available, skipping frontload");
+            // Update metadata to mark as completed (but with warning)
+            let metadata = CacheMetadata {
+                device_id: device_id.to_string(),
+                label: None,
+                firmware_version: None,
+                initialized: true,
+                frontload_status: FrontloadStatus::Completed,
+                frontload_progress: 100,
+                last_frontload: Some(chrono::Utc::now().timestamp()),
+                error_message: Some("No derivation paths available".to_string()),
+            };
+            self.cache.update_cache_metadata(&metadata).await?;
+            return Ok(());
+        }
         
         log::info!("📋 Using {} cached derivation paths from asset data", cached_paths.len());
         

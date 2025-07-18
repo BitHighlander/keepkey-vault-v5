@@ -108,49 +108,13 @@ async fn open_url(app_handle: tauri::AppHandle, url: String) -> Result<(), Strin
 }
 
 #[tauri::command]
-fn restart_backend_startup(app: tauri::AppHandle) -> Result<(), String> {
-    println!("Restarting backend startup process");
-    // Emit event to indicate restart
-    match app.emit("application:state", serde_json::json!({
-        "status": "Restarting...",
-        "connected": false,
-        "features": null
-    })) {
-        Ok(_) => {
-            // Simulate restart process
-            std::thread::spawn(move || {
-                std::thread::sleep(std::time::Duration::from_millis(1000));
-                let _ = app.emit("application:state", serde_json::json!({
-                    "status": "Device ready",
-                    "connected": true,
-                    "features": {
-                        "label": "KeepKey",
-                        "vendor": "KeepKey",
-                        "model": "KeepKey",
-                        "firmware_variant": "keepkey",
-                        "device_id": "keepkey-001",
-                        "language": "english",
-                        "bootloader_mode": false,
-                        "version": "7.7.0",
-                        "firmware_hash": null,
-                        "bootloader_hash": null,
-                        "initialized": true,
-                        "imported": false,
-                        "no_backup": false,
-                        "pin_protection": true,
-                        "pin_cached": false,
-                        "passphrase_protection": false,
-                        "passphrase_cached": false,
-                        "wipe_code_protection": false,
-                        "auto_lock_delay_ms": null,
-                        "policies": []
-                    }
-                }));
-            });
-            Ok(())
-        },
-        Err(e) => Err(format!("Failed to emit restart event: {}", e))
-    }
+fn restart_backend_startup(_app: tauri::AppHandle) -> Result<(), String> {
+    println!("⚠️ restart_backend_startup called - temporarily disabled to prevent event conflicts");
+    // TEMPORARILY DISABLED: This function was sending fake device events that conflicted 
+    // with real device state, causing infinite restart loops in the frontend.
+    // 
+    // TODO: Implement proper restart logic that doesn't emit fake device data
+    Ok(())
 }
 
 // Add a test command to verify kkapi protocol

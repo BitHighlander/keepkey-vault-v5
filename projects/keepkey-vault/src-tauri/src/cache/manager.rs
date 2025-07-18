@@ -35,11 +35,12 @@ impl CacheManager {
         };
         
         // Initialize asset cache from JSON data if not already done
-        if !cache_manager.is_cache_initialized().await? {
-            log::info!("🌱 First-time cache initialization - loading asset data...");
-            cache_manager.init_from_json_data().await?;
+        // For now, skip automatic initialization to prevent blocking startup
+        if !cache_manager.is_cache_initialized().await.unwrap_or(false) {
+            log::info!("🌱 Asset cache not initialized - will initialize lazily");
+            log::info!("   ℹ️ Assets will be loaded on first frontload request");
         } else {
-            let stats = cache_manager.get_cache_stats().await?;
+            let stats = cache_manager.get_cache_stats().await.unwrap_or((0, 0, 0));
             log::info!("✅ Cache already initialized: {} assets, {} paths", 
                 stats.0, stats.1);
         }
