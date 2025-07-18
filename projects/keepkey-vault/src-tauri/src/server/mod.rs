@@ -201,6 +201,12 @@ pub async fn start_server(device_queue_manager: crate::commands::DeviceQueueMana
         .route("/api/portfolio", get(api::portfolio::get_combined_portfolio))
         .route("/api/portfolio/:device_id", get(api::portfolio::get_device_portfolio))
         
+        // Cache endpoints
+        .route("/api/cache/status", get(api::cache::get_cache_status))
+        
+        // Pubkey batch endpoints for performance optimization
+        .route("/api/pubkeys/batch", post(api::pubkeys::batch_get_pubkeys))
+        
         // Merge swagger UI first
         .merge(swagger_ui)
         // Then add state and middleware

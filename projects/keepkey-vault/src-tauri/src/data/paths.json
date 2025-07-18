@@ -223,6 +223,78 @@
       "showDisplay": false
     },
     {
+      "id": "bitcoin_legacy_account_2",
+      "note": "Bitcoin account 2 legacy (p2pkh)",
+      "blockchain": "bitcoin",
+      "symbol": "BTC",
+      "networks": [
+        "bip122:000000000019d6689c085ae165831e93"
+      ],
+      "script_type": "p2pkh",
+      "addressNList": [
+        2147483692,
+        2147483648,
+        2147483650
+      ],
+      "addressNListMaster": [
+        2147483692,
+        2147483648,
+        2147483650,
+        0,
+        0
+      ],
+      "curve": "secp256k1",
+      "showDisplay": false
+    },
+    {
+      "id": "bitcoin_segwit_p2sh_account_2",
+      "note": "Bitcoin account 2 segwit (p2sh-p2wpkh) BIP49",
+      "blockchain": "bitcoin",
+      "symbol": "BTC",
+      "networks": [
+        "bip122:000000000019d6689c085ae165831e93"
+      ],
+      "script_type": "p2sh-p2wpkh",
+      "addressNList": [
+        2147483697,
+        2147483648,
+        2147483650
+      ],
+      "addressNListMaster": [
+        2147483697,
+        2147483648,
+        2147483650,
+        0,
+        0
+      ],
+      "curve": "secp256k1",
+      "showDisplay": false
+    },
+    {
+      "id": "bitcoin_native_segwit_account_2",
+      "note": "Bitcoin account 2 Native Segwit (Bech32)",
+      "blockchain": "bitcoin",
+      "symbol": "BTC",
+      "networks": [
+        "bip122:000000000019d6689c085ae165831e93"
+      ],
+      "script_type": "p2wpkh",
+      "addressNList": [
+        2147483732,
+        2147483648,
+        2147483650
+      ],
+      "addressNListMaster": [
+        2147483732,
+        2147483648,
+        2147483650,
+        0,
+        0
+      ],
+      "curve": "secp256k1",
+      "showDisplay": false
+    },
+    {
       "id": "bitcoin_testnet_account_0",
       "note": "Bitcoin Testnet account 0",
       "blockchain": "bitcoin",

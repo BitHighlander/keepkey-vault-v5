@@ -151,7 +151,7 @@ fn start_usb_service(app_handle: &AppHandle, blocking_actions: blocking_actions:
                             }
                         });
                         
-                        // Clone what we need for the async task
+                        // Clone data for background frontload task
                         let device_id_clone = device_id.clone();
                         let emitter_clone = emitter.clone();
                         
@@ -170,7 +170,8 @@ fn start_usb_service(app_handle: &AppHandle, blocking_actions: blocking_actions:
                         tokio::spawn(async move {
                             log::info!("Device {} is ready for frontload", device_id_clone);
                             
-                            // Wrap frontload in proper async error handling instead of panic catch
+                            // Note: Automatic frontload is now handled by the vault's event controller
+                            // This preserves the original device registry frontload for the keepkey-usb standalone binary
                             let frontload_result = async {
                                 // Find the device entry in the registry
                                 let device_entry = match device_registry::get_all_device_entries() {
@@ -202,8 +203,7 @@ fn start_usb_service(app_handle: &AppHandle, blocking_actions: blocking_actions:
                                         log::warn!("⚠️  Device cache validation failed for {}", device_id_clone);
                                     }
 
-                                    // Create frontloader using the new factory pattern with device info
-                                    // This ensures proper transport creation with USB/HID fallback
+                                    // Create frontloader using the old cache system (for keepkey-usb compatibility)
                                     let frontloader = cache::DeviceFrontloader::new_with_device(
                                         cache,
                                         device_entry.device.clone()
@@ -228,7 +228,7 @@ fn start_usb_service(app_handle: &AppHandle, blocking_actions: blocking_actions:
                                         }
                                     };
                                     
-                                    // Start frontload with progress tracking
+                                    // Start frontload with progress tracking (old system)
                                     frontloader.frontload_all_with_progress(Some(progress_callback)).await
                                 } else {
                                     log::error!("Device {} not found in registry for frontload", device_id_clone);
@@ -239,7 +239,7 @@ fn start_usb_service(app_handle: &AppHandle, blocking_actions: blocking_actions:
                             // Handle the result of frontload (successful or failed)
                             match frontload_result {
                                 Ok(_) => {
-                                    log::info!("✅ Frontload completed successfully for device {}", device_id_clone);
+                                    log::info!("✅ Old frontload system completed successfully for device {}", device_id_clone);
                                     
                                     // Auto-extract xpubs from cache to populate wallet_xpubs table
                                     log::info!("🔄 Auto-extracting xpubs from cache for device {}", device_id_clone);
@@ -252,7 +252,7 @@ fn start_usb_service(app_handle: &AppHandle, blocking_actions: blocking_actions:
                                     // Wait a moment for all async operations to settle
                                     tokio::time::sleep(tokio::time::Duration::from_millis(1000)).await;
                                     
-                                    log::info!("🚀 Device {} is fully ready", device_id_clone);
+                                    log::info!("🚀 Device {} is fully ready with old cache system", device_id_clone);
                                     
                                     if let Ok(entries) = device_registry::get_all_device_entries() {
                                         let payload = ApplicationState {
@@ -265,7 +265,7 @@ fn start_usb_service(app_handle: &AppHandle, blocking_actions: blocking_actions:
                                     }
                                 }
                                 Err(e) => {
-                                    log::error!("❌ Frontload failed for device {}: {}", device_id_clone, e);
+                                    log::error!("❌ Old frontload system failed for device {}: {}", device_id_clone, e);
                                     
                                     // Check if this is a transport/device access error that requires troubleshooting
                                     let error_msg = e.to_string();

@@ -157,6 +157,48 @@ impl CacheManager {
         Ok(())
     }
     
+    /// Get cached pubkey by derivation path
+    pub async fn get_cached_pubkey_by_path(&self, derivation_path: &str) -> Result<Option<CachedPubkey>> {
+        let db = self.db.lock().await;
+        
+        let pubkey = db.query_row(
+            "SELECT id, device_id, derivation_path, coin_name, script_type, xpub, address,
+                    chain_code, public_key, cached_at, last_used
+             FROM cached_pubkeys 
+             WHERE derivation_path = ?1
+             ORDER BY last_used DESC
+             LIMIT 1",
+            params![derivation_path],
+            |row| {
+                Ok(CachedPubkey {
+                    id: Some(row.get(0)?),
+                    device_id: row.get(1)?,
+                    derivation_path: row.get(2)?,
+                    coin_name: row.get(3)?,
+                    script_type: row.get(4)?,
+                    xpub: row.get(5)?,
+                    address: row.get(6)?,
+                    chain_code: row.get(7)?,
+                    public_key: row.get(8)?,
+                    cached_at: row.get(9)?,
+                    last_used: row.get(10)?,
+                })
+            },
+        ).optional()?;
+        
+        // Update last_used timestamp if found
+        if let Some(ref pubkey) = pubkey {
+            if let Some(id) = pubkey.id {
+                let _ = db.execute(
+                    "UPDATE cached_pubkeys SET last_used = ?1 WHERE id = ?2",
+                    params![chrono::Utc::now().timestamp(), id],
+                );
+            }
+        }
+        
+        Ok(pubkey)
+    }
+    
     /// Get cache metadata for a device
     pub async fn get_cache_metadata(&self, device_id: &str) -> Option<CacheMetadata> {
         let db = self.db.lock().await;
@@ -267,6 +309,34 @@ impl CacheManager {
         )?;
         
         Ok(())
+    }
+    
+    /// Count total cached pubkeys across all devices
+    pub async fn count_cached_pubkeys(&self) -> Result<usize> {
+        let db = self.db.lock().await;
+        
+        let count: i64 = db.query_row(
+            "SELECT COUNT(*) FROM cached_pubkeys",
+            params![],
+            |row| row.get(0),
+        )?;
+        
+        Ok(count as usize)
+    }
+    
+    /// Count total cached balances across all devices
+    pub async fn count_cached_balances(&self) -> Result<usize> {
+        let db = self.db.lock().await;
+        
+        // Note: This assumes we have a cached_balances table
+        // For now, return 0 since we don't have balance caching implemented yet
+        let count: i64 = db.query_row(
+            "SELECT COUNT(*) FROM cached_pubkeys WHERE 1=0", // Always returns 0 for now
+            params![],
+            |row| row.get(0),
+        ).unwrap_or(0);
+        
+        Ok(count as usize)
     }
     
     /// Clean up old cache entries (older than 30 days)

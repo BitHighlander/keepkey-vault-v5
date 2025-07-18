@@ -192,6 +192,63 @@ impl EventController {
                                     println!("❌ Failed to emit/queue device:ready event: {}", e);
                                 } else {
                                     println!("📡 Successfully emitted/queued device:ready for {}", device_for_task.unique_id);
+                                    
+                                    // 🚀 Trigger automatic frontload for ready devices
+                                    println!("🚀 Device {} is ready, starting automatic frontload...", device_for_task.unique_id);
+                                    
+                                    let device_id_for_frontload = device_for_task.unique_id.clone();
+                                    let app_for_frontload = app_for_task.clone();
+                                    
+                                    tauri::async_runtime::spawn(async move {
+                                        println!("🔄 Starting automatic frontload for device: {}", device_id_for_frontload);
+                                        
+                                        // Get the cache manager from app state
+                                        if let Some(cache_state) = app_for_frontload.try_state::<std::sync::Arc<once_cell::sync::OnceCell<std::sync::Arc<crate::cache::CacheManager>>>>() {
+                                            match crate::commands::get_cache_manager(cache_state.inner()).await {
+                                                Ok(cache_manager) => {
+                                                    // Get device queue manager from app state
+                                                    if let Some(queue_state) = app_for_frontload.try_state::<crate::commands::DeviceQueueManager>() {
+                                                        let device_queue_manager = queue_state.inner().clone();
+                                                        
+                                                        // Create frontload controller
+                                                        let frontload_controller = crate::cache::FrontloadController::new(
+                                                            cache_manager,
+                                                            device_queue_manager,
+                                                        );
+                                                        
+                                                        // Start frontload
+                                                        match frontload_controller.frontload_device(&device_id_for_frontload).await {
+                                                            Ok(_) => {
+                                                                println!("✅ Automatic frontload completed successfully for device: {}", device_id_for_frontload);
+                                                                
+                                                                // Emit frontload completion event
+                                                                let _ = app_for_frontload.emit("cache:frontload-completed", serde_json::json!({
+                                                                    "device_id": device_id_for_frontload,
+                                                                    "success": true
+                                                                }));
+                                                            }
+                                                            Err(e) => {
+                                                                println!("⚠️ Automatic frontload failed for device {}: {}", device_id_for_frontload, e);
+                                                                
+                                                                // Emit frontload error event (but don't block device ready state)
+                                                                let _ = app_for_frontload.emit("cache:frontload-failed", serde_json::json!({
+                                                                    "device_id": device_id_for_frontload,
+                                                                    "error": e.to_string()
+                                                                }));
+                                                            }
+                                                        }
+                                                    } else {
+                                                        println!("⚠️ Failed to get device queue manager for automatic frontload");
+                                                    }
+                                                }
+                                                Err(e) => {
+                                                    println!("⚠️ Failed to get cache manager for automatic frontload: {}", e);
+                                                }
+                                            }
+                                        } else {
+                                            println!("⚠️ Failed to get cache state for automatic frontload");
+                                        }
+                                    });
                                 }
                                             } else {
                                                                                 println!("⚠️ Device connected but needs updates (bootloader_mode: {}, bootloader: {}, firmware: {}, init: {}, pin_locked: {})", 
