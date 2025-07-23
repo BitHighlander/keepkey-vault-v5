@@ -156,7 +156,7 @@ pub async fn wallet_bootstrap(
     
     // Initialize response data structures
     let mut pubkeys = HashMap::new();
-    let mut addresses = HashMap::new();
+    let addresses = HashMap::new();
     let mut balances = HashMap::new();
     let mut cache_hits = 0;
     let mut missing_paths = Vec::new();

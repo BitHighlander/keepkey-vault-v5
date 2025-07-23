@@ -175,7 +175,7 @@ pub async fn process_transaction_request(
         },
         
         // Ethereum message signing
-        DeviceRequest::EthereumSignMessage { message, address } => {
+        DeviceRequest::EthereumSignMessage { message, address: _ } => {
             let eth_msg = keepkey_rust::messages::EthereumSignMessage {
                 message: message.as_bytes().to_vec(),
                 address_n: vec![], // TODO: We'd need to derive this from the address

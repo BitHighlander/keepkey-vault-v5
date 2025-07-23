@@ -261,7 +261,7 @@ async fn get_device_portfolio_data(
 }
 
 /// Get device label from cached features
-async fn get_device_label(cache_manager: &Arc<CacheManager>, device_id: &str) -> Option<String> {
+async fn get_device_label(_cache_manager: &Arc<CacheManager>, _device_id: &str) -> Option<String> {
     // TODO: Implement fetching device label from cached features
     // For now, return None to use default
     None

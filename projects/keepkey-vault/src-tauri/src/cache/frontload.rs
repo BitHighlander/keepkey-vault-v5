@@ -503,7 +503,7 @@ impl FrontloadController {
                 // Fetch and cache staking positions if we have any cosmos/osmosis addresses
                 if let Some(staking_positions) = self.fetch_staking_positions(pioneer_client, &xpubs).await? {
                     log::info!("🥩 Received {} staking positions", staking_positions.len());
-                    for (network_id, positions) in staking_positions {
+                    for (network_id, positions) in staking_positions.into_iter() {
                         for position in positions {
                             // Convert staking position to portfolio balance format
                             if let Some(balance) = self.staking_position_to_balance(&position, &network_id) {
@@ -611,20 +611,94 @@ impl FrontloadController {
         })
     }
 
-    /// Build and cache dashboard data
-    async fn build_and_cache_dashboard(&self, device_id: &str, client: &PioneerClient, xpubs: &[(String, String)]) -> Result<()> {
-        let xpub_refs: Vec<&str> = xpubs.iter().map(|(s, _)| s.as_str()).collect();
-        match client.build_portfolio(xpub_refs).await {
-            Ok(dashboard) => {
-                if let Err(e) = self.cache.update_dashboard(device_id, &dashboard).await {
-                    log::warn!("Failed to cache dashboard for device {}: {}", device_id, e);
+    /// Build and cache dashboard data from existing portfolio balances
+    async fn build_and_cache_dashboard(&self, device_id: &str, _client: &PioneerClient, _xpubs: &[(String, String)]) -> Result<()> {
+        // Get existing portfolio balances from cache
+        let balances = self.cache.get_device_portfolio(device_id).await
+            .unwrap_or_default();
+        
+        if balances.is_empty() {
+            log::info!("No portfolio balances found for device {}, skipping dashboard creation", device_id);
+            return Ok(());
+        }
+        
+        // Build dashboard from cached balances
+        let dashboard = crate::server::api::portfolio::build_dashboard_from_balances(&balances);
+        
+        // Cache the dashboard
+        if let Err(e) = self.cache.update_dashboard(device_id, &dashboard).await {
+            log::warn!("Failed to cache dashboard for device {}: {}", device_id, e);
+        } else {
+            log::info!("✅ Cached dashboard with ${:.2} total value", dashboard.total_value_usd);
+        }
+        
+        Ok(())
+    }
+
+    /// Fetch staking positions for Cosmos/Osmosis blockchains
+    async fn fetch_staking_positions(
+        &self, 
+        pioneer_client: &PioneerClient, 
+        xpubs: &[(String, String)]
+    ) -> Result<Option<std::collections::HashMap<String, Vec<crate::pioneer_api::StakingPosition>>>> {
+        // Get addresses for cosmos and osmosis chains
+        let db = self.cache.db.lock().await;
+        
+        // Query for cosmos/osmosis addresses that have corresponding xpubs
+        let mut stmt = db.prepare(
+            "SELECT DISTINCT cp.address, cp.coin_name, cp.xpub
+             FROM cached_pubkeys cp
+             WHERE cp.coin_name IN ('cosmos', 'osmosis')
+             AND cp.address IS NOT NULL 
+             AND cp.address != ''
+             AND cp.xpub IN (SELECT xpub FROM (VALUES (?1)) AS x(xpub))"
+        )?;
+        
+        // Build the xpub list for the query
+        let xpub_list: Vec<String> = xpubs.iter().map(|(xpub, _)| xpub.clone()).collect();
+        
+        let mut staking_map = std::collections::HashMap::new();
+        
+        for xpub in &xpub_list {
+            let addresses: Vec<(String, String)> = stmt.query_map([xpub], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })?
+            .filter_map(|r| r.ok())
+            .collect();
+            
+            for (address, blockchain) in addresses {
+                let network_id = match blockchain.as_str() {
+                    "cosmos" => "cosmos:cosmoshub-4",
+                    "osmosis" => "cosmos:osmosis-1",
+                    _ => continue,
+                };
+                
+                log::debug!("🔍 Fetching staking positions for {} address: {}", blockchain, address);
+                
+                match pioneer_client.get_staking_positions(network_id, &address).await {
+                    Ok(positions) if !positions.is_empty() => {
+                        log::info!("✅ Found {} staking positions for {}", positions.len(), address);
+                        staking_map.entry(network_id.to_string())
+                            .or_insert_with(Vec::new)
+                            .extend(positions);
+                    }
+                    Ok(_) => {
+                        log::debug!("No staking positions found for {}", address);
+                    }
+                    Err(e) => {
+                        log::warn!("Failed to fetch staking positions for {}: {}", address, e);
+                    }
                 }
-                Ok(())
             }
-            Err(e) => {
-                log::warn!("Failed to build portfolio dashboard: {}", e);
-                Err(e)
-            }
+        }
+        
+        drop(stmt);
+        drop(db);
+        
+        if staking_map.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(staking_map))
         }
     }
 
