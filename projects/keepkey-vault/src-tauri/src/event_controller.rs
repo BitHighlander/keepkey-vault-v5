@@ -1,10 +1,10 @@
-use keepkey_rust::friendly_usb::FriendlyUsbDevice;
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
-use tauri::{AppHandle, Emitter, Manager};
+use std::sync::Arc;
 use tokio::time::interval;
 use tokio_util::sync::CancellationToken;
+use tauri::{AppHandle, Emitter, Manager};
+use keepkey_rust::friendly_usb::FriendlyUsbDevice;
 
 // Device operation timeout - matches the timeout used in commands.rs
 const DEVICE_OPERATION_TIMEOUT_SECS: u64 = 30;
@@ -21,8 +21,10 @@ pub struct EventController {
     cancellation_token: CancellationToken,
     task_handle: Option<tauri::async_runtime::JoinHandle<()>>,
     is_running: bool,
-    // Track devices with connection state
-    known_devices: Arc<Mutex<HashMap<String, DeviceConnectionInfo>>>,
+    // Track devices with connection state (use async mutex for await compatibility)
+    known_devices: Arc<tokio::sync::Mutex<HashMap<String, DeviceConnectionInfo>>>,
+    // Track events that have been emitted to prevent infinite loops
+    emitted_events: Arc<tokio::sync::Mutex<HashMap<String, i64>>>,
 }
 
 impl EventController {
@@ -31,7 +33,8 @@ impl EventController {
             cancellation_token: CancellationToken::new(),
             task_handle: None,
             is_running: false,
-            known_devices: Arc::new(Mutex::new(HashMap::new())),
+            known_devices: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+            emitted_events: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
         }
     }
     
@@ -45,6 +48,7 @@ impl EventController {
         let cancellation_token = self.cancellation_token.clone();
         
         let known_devices = self.known_devices.clone();
+        let emitted_events = self.emitted_events.clone();
         
         let task_handle = tauri::async_runtime::spawn(async move {
             let mut interval = interval(Duration::from_millis(1000)); // Check every second
@@ -99,37 +103,91 @@ impl EventController {
                         let current_devices = keepkey_rust::features::list_connected_devices();
                         println!("🔍 DEBUG: Device scan #{} - found {} devices", loop_count, current_devices.len());
                         
-                        // Track device connections and reconnections
-                        {
-                            let mut known = known_devices.lock().unwrap();
-                            for device in &current_devices {
-                                let device_key = device.serial_number.as_ref()
-                                    .unwrap_or(&device.unique_id)
-                                    .clone();
+                        // Handle device disconnections by checking which devices are no longer present
+                        let current_device_ids: std::collections::HashSet<String> = current_devices.iter()
+                            .map(|d| d.unique_id.clone())
+                            .collect();
+                        let last_device_ids: std::collections::HashSet<String> = last_devices.iter()
+                            .map(|d| d.unique_id.clone())
+                            .collect();
+                        
+                        // Find disconnected devices
+                        let disconnected_devices: Vec<String> = last_device_ids.difference(&current_device_ids)
+                            .cloned()
+                            .collect();
+                        
+                        if !disconnected_devices.is_empty() {
+                            println!("🔌 Detected {} device(s) disconnected: {:?}", disconnected_devices.len(), disconnected_devices);
+                            
+                            // Clear tracking state for disconnected devices to allow fresh reconnection
+                            let mut known = known_devices.lock().await;
+                            let mut emitted = emitted_events.lock().await;
+                            for device_id in &disconnected_devices {
+                                // Remove all tracking entries for this device
+                                let keys_to_remove: Vec<String> = known.keys()
+                                    .filter(|key| key.starts_with(device_id))
+                                    .cloned()
+                                    .collect();
                                 
-                                if let Some(info) = known.get_mut(&device_key) {
-                                    // Device was known - check if it was temporarily disconnected
-                                    if info.disconnected_at.is_some() {
-                                        println!("🔄 Device {} reconnected (was temporarily disconnected)", device_key);
-                                        info.disconnected_at = None;
-                                        info.device = device.clone();
-                                        
-                                        // Emit reconnection event
-                                        let _ = app_handle.emit("device:reconnected", serde_json::json!({
-                                            "deviceId": device.unique_id,
-                                            "wasTemporary": true
-                                        }));
-                                        continue; // Skip new device processing
-                                    }
-                                } else {
-                                    // New device - add to tracking
-                                    known.insert(device_key.clone(), DeviceConnectionInfo {
-                                        device: device.clone(),
-                                        disconnected_at: None,
-                                    });
+                                for key in keys_to_remove {
+                                    known.remove(&key);
+                                    println!("🧹 Cleared tracking state: {}", key);
                                 }
+                                
+                                // Remove all emitted event entries for this device
+                                let emitted_keys_to_remove: Vec<String> = emitted.keys()
+                                    .filter(|key| key.starts_with(device_id))
+                                    .cloned()
+                                    .collect();
+                                
+                                for key in emitted_keys_to_remove {
+                                    emitted.remove(&key);
+                                    println!("🧹 Cleared emitted event: {}", key);
+                                }
+                                
+                                // Emit device disconnected event
+                                let disconnect_payload = serde_json::json!({
+                                    "device_id": device_id,
+                                    "status": "disconnected"
+                                });
+                                let _ = app_handle.emit("device:disconnected", disconnect_payload);
+                                println!("📡 Emitted device:disconnected for {}", device_id);
                             }
+                            drop(known); // Release lock
+                            drop(emitted); // Release lock
                         }
+                        
+                        // Process device connections and updates
+                        {
+                            let mut known = known_devices.lock().await;
+                            for device in &current_devices {
+                                    let device_key = device.serial_number.as_ref()
+                                        .unwrap_or(&device.unique_id)
+                                        .clone();
+                                    
+                                    if let Some(info) = known.get_mut(&device_key) {
+                                        // Device was known - check if it was temporarily disconnected
+                                        if info.disconnected_at.is_some() {
+                                            println!("🔄 Device {} reconnected (was temporarily disconnected)", device_key);
+                                            info.disconnected_at = None;
+                                            info.device = device.clone();
+                                            
+                                            // Emit reconnection event
+                                            let _ = app_handle.emit("device:reconnected", serde_json::json!({
+                                                "deviceId": device.unique_id,
+                                                "wasTemporary": true
+                                            }));
+                                            continue; // Skip new device processing
+                                        }
+                                    } else {
+                                        // New device - add to tracking
+                                        known.insert(device_key.clone(), DeviceConnectionInfo {
+                                            device: device.clone(),
+                                            disconnected_at: None,
+                                        });
+                                    }
+                                }
+                        } // Release lock
                         
                         // Check for newly connected devices (original logic)
                         println!("🔍 DEBUG: Checking {} current devices against {} last devices", current_devices.len(), last_devices.len());
@@ -271,8 +329,11 @@ impl EventController {
                                         if let Some(cache_state) = app_for_frontload.try_state::<std::sync::Arc<once_cell::sync::OnceCell<std::sync::Arc<crate::cache::CacheManager>>>>() {
                                             match crate::commands::get_cache_manager(cache_state.inner()).await {
                                                 Ok(cache_manager) => {
+                                                    println!("✅ Cache manager obtained for frontload");
+                                                    
                                                     // Get device queue manager from app state
                                                     if let Some(queue_state) = app_for_frontload.try_state::<crate::commands::DeviceQueueManager>() {
+                                                        println!("✅ Device queue manager obtained for frontload");
                                                         let device_queue_manager = queue_state.inner().clone();
                                                         
                                                         // Create frontload controller with cloned cache manager
@@ -281,6 +342,8 @@ impl EventController {
                                                             cache_manager_for_controller,
                                                             device_queue_manager,
                                                         );
+                                                        
+                                                        println!("🚀 Starting frontload for device: {}", device_id_for_frontload);
                                                         
                                                         // Start frontload
                                                         match frontload_controller.frontload_device(&device_id_for_frontload).await {
@@ -311,15 +374,55 @@ impl EventController {
                                                             }
                                                         }
                                                     } else {
-                                                        println!("⚠️ Failed to get device queue manager for automatic frontload");
+                                                        println!("❌ Failed to get device queue manager for automatic frontload");
                                                     }
                                                 }
                                                 Err(e) => {
-                                                    println!("⚠️ Failed to get cache manager for automatic frontload: {}", e);
+                                                    println!("❌ Failed to get cache manager for automatic frontload: {}", e);
+                                                    println!("🔄 This usually means cache is still initializing - frontload will retry later");
+                                                    
+                                                    // Retry frontload after cache initialization delay
+                                                    tokio::time::sleep(std::time::Duration::from_millis(3000)).await;
+                                                    println!("🔄 Retrying frontload after cache initialization delay...");
+                                                    
+                                                    // Try again with more detailed error logging
+                                                    match crate::commands::get_cache_manager(cache_state.inner()).await {
+                                                        Ok(cache_manager) => {
+                                                            println!("✅ Cache manager ready on retry, proceeding with frontload");
+                                                            
+                                                            if let Some(queue_state) = app_for_frontload.try_state::<crate::commands::DeviceQueueManager>() {
+                                                                let device_queue_manager = queue_state.inner().clone();
+                                                                let frontload_controller = crate::cache::FrontloadController::new(
+                                                                    cache_manager.clone(),
+                                                                    device_queue_manager,
+                                                                );
+                                                                
+                                                                match frontload_controller.frontload_device(&device_id_for_frontload).await {
+                                                                    Ok(_) => {
+                                                                        println!("✅ Frontload completed on retry for device: {}", device_id_for_frontload);
+                                                                        let _ = app_for_frontload.emit("cache:frontload-completed", serde_json::json!({
+                                                                            "device_id": device_id_for_frontload,
+                                                                            "success": true
+                                                                        }));
+                                                                    }
+                                                                    Err(retry_err) => {
+                                                                        println!("❌ Frontload failed on retry: {}", retry_err);
+                                                                        let _ = app_for_frontload.emit("cache:frontload-failed", serde_json::json!({
+                                                                            "device_id": device_id_for_frontload,
+                                                                            "error": retry_err.to_string()
+                                                                        }));
+                                                                    }
+                                                                }
+                                                            }
+                                                        }
+                                                        Err(retry_err) => {
+                                                            println!("❌ Cache manager still not ready on retry: {}", retry_err);
+                                                        }
+                                                    }
                                                 }
                                             }
                                         } else {
-                                            println!("⚠️ Failed to get cache state for automatic frontload");
+                                            println!("❌ Failed to get cache state for automatic frontload");
                                         }
                                     });
                                 }
@@ -379,18 +482,29 @@ impl EventController {
                                             }
                                             
                                                                         // Emit device:features-updated event with evaluated status (for DeviceUpdateManager)
-                            // This is a critical event that should be queued if frontend isn't ready
+                        // This is a critical event that should be queued if frontend isn't ready
+                        // 🚨 ONLY EMIT ONCE PER DEVICE - Track to prevent infinite loops
+                        let device_key = format!("{}:features-updated", device_for_features.unique_id);
+                        let mut emitted = emitted_events.lock().await;
+                        
+                        if !emitted.contains_key(&device_key) {
+                            // This is the first time emitting features-updated for this device
                             let features_payload = serde_json::json!({
-                                                                                "deviceId": device_for_features.unique_id,
-                                                "features": features,
-                                                "status": status  // Use evaluated status instead of hardcoded "ready"
+                                "deviceId": device_for_features.unique_id,
+                                "features": features,
+                                "status": status  // Use evaluated status instead of hardcoded "ready"
                             });
                             
-                                                                            if let Err(e) = crate::commands::emit_or_queue_event(&app_for_features, "device:features-updated", features_payload).await {
+                            if let Err(e) = crate::commands::emit_or_queue_event(&app_for_features, "device:features-updated", features_payload).await {
                                 println!("❌ Failed to emit/queue device:features-updated event: {}", e);
                             } else {
-                                                                                println!("📡 Successfully emitted/queued device:features-updated for {}", device_for_features.unique_id);
+                                println!("📡 Successfully emitted/queued device:features-updated for {}", device_for_features.unique_id);
+                                // Mark this device as having had features-updated emitted
+                                emitted.insert(device_key, chrono::Utc::now().timestamp());
                             }
+                        } else {
+                            println!("🔄 Skipping duplicate device:features-updated for {}", device_for_features.unique_id);
+                        }
                                         }
                                         Err(e) => {
                                             println!("❌ Failed to get features for {}: {}", device_for_features.unique_id, e);
@@ -459,7 +573,7 @@ impl EventController {
                         }
                         
                         // Check for disconnected devices with grace period
-                        let mut known = known_devices.lock().unwrap();
+                        let mut known = known_devices.lock().await;
                         for device in &last_devices {
                             if !current_devices.iter().any(|d| d.unique_id == device.unique_id) {
                                 // Check if this device has grace period tracking
@@ -546,7 +660,7 @@ impl EventController {
                         
                         // Clean up devices that have been disconnected for too long
                         {
-                            let mut known = known_devices.lock().unwrap();
+                            let mut known = known_devices.lock().await;
                             known.retain(|device_key, info| {
                                 if let Some(disconnected_at) = info.disconnected_at {
                                     if disconnected_at.elapsed() > Duration::from_secs(DEVICE_DISCONNECTION_GRACE_PERIOD_SECS * 2) {
@@ -799,11 +913,11 @@ async fn log_all_devices_portfolio_summary(cache_manager: &std::sync::Arc<crate:
 }
 
 // Create and manage event controller with proper Arc<Mutex<>> wrapper
-pub fn spawn_event_controller(app: &AppHandle) -> Arc<Mutex<EventController>> {
+pub fn spawn_event_controller(app: &AppHandle) -> Arc<tokio::sync::Mutex<EventController>> {
     let mut controller = EventController::new();
     controller.start(app);
     
-    let controller_arc = Arc::new(Mutex::new(controller));
+    let controller_arc = Arc::new(tokio::sync::Mutex::new(controller));
     
     // Store the controller in app state so it can be properly cleaned up
     app.manage(controller_arc.clone());
