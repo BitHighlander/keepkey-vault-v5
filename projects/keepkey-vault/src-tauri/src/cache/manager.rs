@@ -74,6 +74,41 @@ impl CacheManager {
         let migration_006 = include_str!("sql/006_asset_and_path_tables.sql");
         conn.execute_batch(migration_006)?;
         
+        // Portfolio history table
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS portfolio_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                device_id TEXT NOT NULL,
+                timestamp INTEGER NOT NULL,
+                total_value_usd REAL NOT NULL,
+                asset_count INTEGER,
+                change_24h REAL,
+                change_7d REAL,
+                snapshot_data TEXT,
+                UNIQUE(device_id, timestamp)
+            )",
+            []
+        )?;
+        
+        // Index for efficient time-based queries
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_portfolio_history_device_time 
+             ON portfolio_history(device_id, timestamp DESC)",
+            []
+        )?;
+        
+        // Portfolio last value cache for instant loading
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS portfolio_last_value (
+                device_id TEXT PRIMARY KEY,
+                total_value_usd REAL NOT NULL,
+                last_updated INTEGER NOT NULL,
+                asset_breakdown TEXT,
+                change_from_previous REAL
+            )",
+            []
+        )?;
+        
         Ok(())
     }
     

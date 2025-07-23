@@ -35,6 +35,22 @@ pub struct PortfolioResponse {
     pub last_updated: Option<i64>,
 }
 
+/// Enhanced portfolio response with historical data
+#[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct EnhancedPortfolioResponse {
+    pub success: bool,
+    pub device_id: Option<String>,
+    pub total_value_usd: f64,
+    pub last_updated: i64,
+    pub change_from_previous: Option<f64>,
+    pub change_24h: Option<f64>,
+    pub balances: Vec<PortfolioBalance>,
+    pub history: Vec<(i64, f64)>,
+    pub cached: bool,
+    pub refreshing: bool,
+}
+
 /// Get combined portfolio across all devices
 #[utoipa::path(
     get,
@@ -180,6 +196,135 @@ pub async fn get_device_portfolio(
         cached: is_cached,
         last_updated: Some(chrono::Utc::now().timestamp()),
     }))
+}
+
+/// Get instant portfolio with historical data
+#[utoipa::path(
+    get,
+    path = "/api/portfolio/instant/{device_id}",
+    params(
+        ("device_id" = String, Path, description = "Device ID to get portfolio for")
+    ),
+    responses(
+        (status = 200, description = "Instant portfolio data with history", body = EnhancedPortfolioResponse),
+        (status = 404, description = "Device not found"),
+        (status = 500, description = "Internal server error")
+    ),
+    tag = "portfolio"
+)]
+pub async fn get_instant_portfolio(
+    State(state): State<Arc<ServerState>>,
+    Path(device_id): Path<String>,
+) -> Result<Json<EnhancedPortfolioResponse>, StatusCode> {
+    let cache = crate::commands::get_cache_manager(&state.cache_manager).await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    
+    // Get last cached value immediately
+    let (total_value_usd, last_updated, change_from_previous) = 
+        match cache.get_last_portfolio_value(&device_id).await {
+            Ok(Some(data)) => data,
+            Ok(None) => {
+                // No cached value, return empty response and trigger refresh
+                trigger_background_refresh(state.clone(), cache.clone(), device_id.clone());
+                return Ok(Json(EnhancedPortfolioResponse {
+                    success: true,
+                    device_id: Some(device_id),
+                    total_value_usd: 0.0,
+                    last_updated: 0,
+                    change_from_previous: None,
+                    change_24h: None,
+                    balances: vec![],
+                    history: vec![],
+                    cached: false,
+                    refreshing: true,
+                }));
+            }
+            Err(e) => {
+                log::error!("Failed to get cached portfolio value: {}", e);
+                return Err(StatusCode::INTERNAL_SERVER_ERROR);
+            }
+        };
+    
+    // Get current balances
+    let balances = cache.get_device_portfolio(&device_id).await
+        .unwrap_or_default();
+    
+    // Get portfolio history (last 7 days)
+    let week_ago = chrono::Utc::now().timestamp() - (7 * 24 * 3600);
+    let history = cache.get_portfolio_history(&device_id, Some(week_ago), None).await
+        .unwrap_or_default();
+    
+    // Check if data is stale (> 10 minutes old)
+    let now = chrono::Utc::now().timestamp();
+    let is_stale = (now - last_updated) > 600;
+    
+    // Trigger background refresh if stale
+    if is_stale {
+        trigger_background_refresh(state.clone(), cache.clone(), device_id.clone());
+    }
+    
+    Ok(Json(EnhancedPortfolioResponse {
+        success: true,
+        device_id: Some(device_id),
+        total_value_usd,
+        last_updated,
+        change_from_previous,
+        change_24h: None, // TODO: Calculate from history
+        balances,
+        history,
+        cached: true,
+        refreshing: is_stale,
+    }))
+}
+
+/// Get portfolio history for a device
+#[utoipa::path(
+    get,
+    path = "/api/portfolio/history/{device_id}",
+    params(
+        ("device_id" = String, Path, description = "Device ID to get history for"),
+        ("from" = Option<i64>, Query, description = "From timestamp (unix epoch)"),
+        ("to" = Option<i64>, Query, description = "To timestamp (unix epoch)")
+    ),
+    responses(
+        (status = 200, description = "Portfolio history data", body = Vec<(i64, f64)>),
+        (status = 404, description = "Device not found"),
+        (status = 500, description = "Internal server error")
+    ),
+    tag = "portfolio"
+)]
+pub async fn get_portfolio_history(
+    State(state): State<Arc<ServerState>>,
+    Path(device_id): Path<String>,
+    Query(params): Query<std::collections::HashMap<String, String>>,
+) -> Result<Json<Vec<(i64, f64)>>, StatusCode> {
+    let cache = crate::commands::get_cache_manager(&state.cache_manager).await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    
+    // Parse query params
+    let from_timestamp = params.get("from")
+        .and_then(|v| v.parse::<i64>().ok());
+    let to_timestamp = params.get("to")
+        .and_then(|v| v.parse::<i64>().ok());
+    
+    // Get history
+    let history = cache.get_portfolio_history(&device_id, from_timestamp, to_timestamp)
+        .await
+        .unwrap_or_default();
+    
+    Ok(Json(history))
+}
+
+fn trigger_background_refresh(
+    state: Arc<ServerState>,
+    cache: Arc<crate::cache::CacheManager>,
+    device_id: String,
+) {
+    tokio::spawn(async move {
+        if let Err(e) = refresh_device_portfolio(&state, &cache, &device_id).await {
+            log::error!("Background portfolio refresh failed: {}", e);
+        }
+    });
 }
 
 /// Refresh portfolio for a device

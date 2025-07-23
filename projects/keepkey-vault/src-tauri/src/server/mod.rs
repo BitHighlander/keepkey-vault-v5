@@ -61,6 +61,8 @@ pub struct ServerState {
         api::transactions::cosmos_sign_amino,
         api::portfolio::get_combined_portfolio,
         api::portfolio::get_device_portfolio,
+        api::portfolio::get_instant_portfolio,
+        api::portfolio::get_portfolio_history,
     ),
     components(
         schemas(
@@ -201,6 +203,8 @@ pub async fn start_server(device_queue_manager: crate::commands::DeviceQueueMana
         // Portfolio endpoints
         .route("/api/portfolio", get(api::portfolio::get_combined_portfolio))
         .route("/api/portfolio/:device_id", get(api::portfolio::get_device_portfolio))
+        .route("/api/portfolio/instant/:device_id", get(api::portfolio::get_instant_portfolio))
+        .route("/api/portfolio/history/:device_id", get(api::portfolio::get_portfolio_history))
         
         // Unified portfolio endpoint for all devices
         .route("/api/v1/portfolio/all", get(portfolio_unified::get_unified_portfolio))

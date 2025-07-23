@@ -281,29 +281,145 @@ impl CacheManager {
         Ok(())
     }
     
-    /// Save portfolio history snapshot
+    /// Save portfolio snapshot to history
     pub async fn save_portfolio_snapshot(&self, device_id: &str, total_value_usd: f64) -> Result<()> {
         let db = self.db.lock().await;
-        
         let now = chrono::Utc::now().timestamp();
         
-        // Get current portfolio for snapshot
-        let balances = self.get_device_portfolio(device_id).await?;
-        let snapshot_json = serde_json::to_string(&balances)?;
+        // Get current portfolio for asset count
+        let asset_count: i32 = db.query_row(
+            "SELECT COUNT(DISTINCT ticker) FROM portfolio_balances WHERE device_id = ?1",
+            params![device_id],
+            |row| row.get(0)
+        ).unwrap_or(0);
         
+        // Calculate 24h change
+        let change_24h = self.calculate_portfolio_change(&db, device_id, 86400)?;
+        
+        // Save to history
         db.execute(
-            "INSERT INTO portfolio_history (device_id, timestamp, total_value_usd, snapshot_json)
-             VALUES (?1, ?2, ?3, ?4)",
-            params![device_id, now, total_value_usd.to_string(), snapshot_json],
+            "INSERT OR REPLACE INTO portfolio_history 
+             (device_id, timestamp, total_value_usd, asset_count, change_24h)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![device_id, now, total_value_usd, asset_count, change_24h]
         )?;
         
-        // Keep only last 30 days of history
-        let cutoff = now - (30 * 24 * 3600);
+        // Update last value cache
+        let previous_value = db.query_row(
+            "SELECT total_value_usd FROM portfolio_last_value WHERE device_id = ?1",
+            params![device_id],
+            |row| row.get::<_, f64>(0)
+        ).ok();
+        
+        let change_from_previous = previous_value.map(|prev| ((total_value_usd - prev) / prev * 100.0));
+        
         db.execute(
-            "DELETE FROM portfolio_history WHERE device_id = ?1 AND timestamp < ?2",
-            params![device_id, cutoff],
+            "INSERT OR REPLACE INTO portfolio_last_value 
+             (device_id, total_value_usd, last_updated, change_from_previous)
+             VALUES (?1, ?2, ?3, ?4)",
+            params![device_id, total_value_usd, now, change_from_previous]
         )?;
         
         Ok(())
+    }
+    
+    /// Get last cached portfolio value for instant loading
+    pub async fn get_last_portfolio_value(&self, device_id: &str) -> Result<Option<(f64, i64, Option<f64>)>> {
+        let db = self.db.lock().await;
+        
+        db.query_row(
+            "SELECT total_value_usd, last_updated, change_from_previous 
+             FROM portfolio_last_value WHERE device_id = ?1",
+            params![device_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+        ).optional()
+        .map_err(Into::into)
+    }
+    
+    /// Get portfolio history for charting
+    pub async fn get_portfolio_history(
+        &self, 
+        device_id: &str,
+        from_timestamp: Option<i64>,
+        to_timestamp: Option<i64>
+    ) -> Result<Vec<(i64, f64)>> {
+        let db = self.db.lock().await;
+        
+        let from = from_timestamp.unwrap_or(0);
+        let to = to_timestamp.unwrap_or(chrono::Utc::now().timestamp());
+        
+        let mut stmt = db.prepare(
+            "SELECT timestamp, total_value_usd 
+             FROM portfolio_history 
+             WHERE device_id = ?1 AND timestamp BETWEEN ?2 AND ?3
+             ORDER BY timestamp ASC"
+        )?;
+        
+        let history = stmt.query_map(params![device_id, from, to], |row| {
+            Ok((row.get(0)?, row.get(1)?))
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+        
+        Ok(history)
+    }
+    
+    /// Calculate portfolio change over a time period
+    fn calculate_portfolio_change(&self, db: &rusqlite::Connection, device_id: &str, seconds_ago: i64) -> Result<Option<f64>> {
+        let cutoff = chrono::Utc::now().timestamp() - seconds_ago;
+        
+        // Get current value
+        let current: f64 = db.query_row(
+            "SELECT COALESCE(SUM(CAST(balance_usd AS REAL)), 0) 
+             FROM portfolio_balances WHERE device_id = ?1",
+            params![device_id],
+            |row| row.get(0)
+        )?;
+        
+        // Get historical value
+        let historical: Option<f64> = db.query_row(
+            "SELECT total_value_usd FROM portfolio_history 
+             WHERE device_id = ?1 AND timestamp <= ?2 
+             ORDER BY timestamp DESC LIMIT 1",
+            params![device_id, cutoff],
+            |row| row.get(0)
+        ).optional()?;
+        
+        if let Some(hist) = historical {
+            if hist > 0.0 {
+                Ok(Some(((current - hist) / hist) * 100.0))
+            } else {
+                Ok(None)
+            }
+        } else {
+            Ok(None)
+        }
+    }
+    
+    /// Get combined portfolio history across all devices
+    pub async fn get_combined_portfolio_history(
+        &self,
+        from_timestamp: Option<i64>,
+        to_timestamp: Option<i64>
+    ) -> Result<Vec<(i64, f64)>> {
+        let db = self.db.lock().await;
+        
+        let from = from_timestamp.unwrap_or(0);
+        let to = to_timestamp.unwrap_or(chrono::Utc::now().timestamp());
+        
+        // Get aggregated history
+        let mut stmt = db.prepare(
+            "SELECT timestamp, SUM(total_value_usd) as total
+             FROM portfolio_history 
+             WHERE timestamp BETWEEN ?1 AND ?2
+             GROUP BY timestamp
+             ORDER BY timestamp ASC"
+        )?;
+        
+        let history = stmt.query_map(params![from, to], |row| {
+            Ok((row.get(0)?, row.get(1)?))
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+        
+        Ok(history)
     }
 } 
