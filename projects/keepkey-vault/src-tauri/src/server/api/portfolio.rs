@@ -358,17 +358,19 @@ async fn refresh_device_portfolio(
     // Create Pioneer client
     let pioneer_client = crate::pioneer_api::create_client(api_key)?;
     
-    // Build portfolio requests
-    let mut requests = Vec::new();
+    // Build pubkey info for Pioneer API
+    let mut pubkey_infos = Vec::new();
     for (pubkey, caip) in &xpubs {
-        requests.push(crate::pioneer_api::PortfolioRequest {
-            caip: caip.clone(),
+        pubkey_infos.push(crate::pioneer_api::PubkeyInfo {
             pubkey: pubkey.clone(),
+            networks: vec![caip.clone()], // Use CAIP as network identifier
+            path: None,
+            address: None,
         });
     }
     
-    // Fetch balances
-    let balances = pioneer_client.get_portfolio_balances(requests).await?;
+    // Fetch balances using simplified Pioneer API
+    let balances = pioneer_client.get_portfolio_balances(pubkey_infos).await?;
     
     // Save to cache
     for balance in &balances {

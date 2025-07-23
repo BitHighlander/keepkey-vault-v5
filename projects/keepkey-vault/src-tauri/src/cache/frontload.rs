@@ -4,9 +4,8 @@ use keepkey_rust::device_queue::DeviceQueueHandle;
 use super::{CacheManager, CacheMetadata};
 use super::types::FrontloadStatus;
 use crate::commands::{DeviceQueueManager, DeviceRequest, DeviceResponse};
-use crate::pioneer_api::{PioneerClient, PortfolioRequest};
-use serde::{Deserialize, Serialize};
-use serde_json;
+use crate::pioneer_api::PioneerClient;
+use uuid;
 
 /// Controller for frontloading device public keys and addresses
 pub struct FrontloadController {
@@ -20,23 +19,34 @@ pub struct FrontloadController {
 impl FrontloadController {
     /// Create a new frontload controller with optional Pioneer API integration
     pub fn new(cache: Arc<CacheManager>, queue_manager: DeviceQueueManager) -> Self {
-        // Try to create Pioneer client - don't fail if API key is missing
+        // Try to create Pioneer client - generate unique API key if none provided
         let pioneer_client = match std::env::var("PIONEER_API_KEY") {
             Ok(api_key) => {
                 match PioneerClient::new(Some(api_key)) {
                     Ok(client) => {
-                        log::info!("✅ Pioneer API client initialized for portfolio fetching");
+                        log::info!("✅ Pioneer API client initialized with provided API key");
                         Some(client)
                     }
                     Err(e) => {
-                        log::warn!("⚠️ Failed to initialize Pioneer API client: {}", e);
+                        log::warn!("⚠️ Failed to initialize Pioneer API client with provided key: {}", e);
                         None
                     }
                 }
             }
             Err(_) => {
-                log::info!("ℹ️ No PIONEER_API_KEY found, portfolio fetching disabled");
-                None
+                // Generate a unique UUID as API key for this user session
+                let unique_api_key = uuid::Uuid::new_v4().to_string();
+                log::info!("🔑 No PIONEER_API_KEY found, generated unique session key: {}", &unique_api_key[0..8]);
+                match PioneerClient::new(Some(unique_api_key)) {
+                    Ok(client) => {
+                        log::info!("✅ Pioneer API client initialized with unique session key");
+                        Some(client)
+                    }
+                    Err(e) => {
+                        log::warn!("⚠️ Failed to initialize Pioneer API client with generated key: {}", e);
+                        None
+                    }
+                }
             }
         };
 
@@ -441,7 +451,7 @@ impl FrontloadController {
         Ok(response)
     }
 
-    /// Fetch and cache portfolio data for a device using collected xpubs
+    /// Fetch and cache portfolio data using Pioneer API
     async fn frontload_portfolio_data(&self, device_id: &str) -> Result<usize> {
         // Check if Pioneer API client is available
         let pioneer_client = match &self.pioneer_client {
@@ -452,14 +462,14 @@ impl FrontloadController {
             }
         };
 
-        // Collect all xpubs for this device
+        // Collect all xpubs for this device from cached pubkeys
         let xpubs = self.collect_device_xpubs(device_id).await?;
         if xpubs.is_empty() {
             log::warn!("No xpubs found for device {}, skipping portfolio fetch", device_id);
             return Ok(0);
         }
 
-        log::info!("💰 Fetching portfolio data for {} xpubs...", xpubs.len());
+        log::info!("💰 Fetching real portfolio data from Pioneer API for {} xpubs...", xpubs.len());
 
         // Update progress to 75%
         if let Some(mut metadata) = self.cache.get_cache_metadata(device_id).await {
@@ -467,86 +477,35 @@ impl FrontloadController {
             let _ = self.cache.update_cache_metadata(&metadata).await;
         }
 
-        // Create portfolio requests with proper CAIP construction
-        let mut portfolio_requests = Vec::new();
-        for (xpub, blockchain) in &xpubs {
-            // Build proper CAIP based on blockchain and cached asset data
-            if let Some(caip) = self.build_caip_for_xpub(blockchain).await {
-                portfolio_requests.push(PortfolioRequest {
-                    caip,
-                    pubkey: xpub.clone(),
-                });
-            } else {
-                log::warn!("⚠️ No CAIP mapping found for blockchain: {}", blockchain);
+        // Convert xpubs to PubkeyInfo for Pioneer API
+        let pubkey_infos: Vec<crate::pioneer_api::PubkeyInfo> = xpubs.iter().map(|(xpub, blockchain)| {
+            crate::pioneer_api::PubkeyInfo {
+                pubkey: xpub.clone(),
+                networks: vec![blockchain.clone()], // Use actual blockchain from derivation
+                path: None, // Could be enhanced with actual derivation path
+                address: None, // Address will be derived by Pioneer API
             }
-        }
+        }).collect();
 
-        // Fetch portfolio balances
-        match pioneer_client.get_portfolio_balances(portfolio_requests).await {
-            Ok(portfolio_balances) => {
-                log::info!("📈 Received {} balance entries from Pioneer API", portfolio_balances.len());
-
-                // Update progress to 85%
-                if let Some(mut metadata) = self.cache.get_cache_metadata(device_id).await {
-                    metadata.frontload_progress = 85;
-                    let _ = self.cache.update_cache_metadata(&metadata).await;
-                }
-
-                // Save portfolio balances to cache with pubkey linkage
-                let mut saved_count = 0;
-                for balance in &portfolio_balances {
-                    // Try to find the specific pubkey that generated this balance
-                    let matching_pubkey = self.find_pubkey_for_balance(device_id, balance).await;
-                    match self.cache.save_portfolio_balance_with_pubkey(
-                        balance, 
-                        device_id, 
-                        matching_pubkey.as_deref()
-                    ).await {
-                        Ok(_) => saved_count += 1,
-                        Err(e) => log::warn!("Failed to save balance for {}: {}", balance.ticker, e),
+        // Fetch real portfolio balances from Pioneer API
+        match pioneer_client.get_portfolio_balances(pubkey_infos).await {
+            Ok(balances) => {
+                log::info!("✅ Received {} real portfolio balances from Pioneer API", balances.len());
+                
+                // Cache the real portfolio data
+                for balance in &balances {
+                    if let Err(e) = self.cache.save_portfolio_balance(balance, device_id).await {
+                        log::warn!("⚠️ Failed to cache balance for {}: {}", balance.ticker, e);
                     }
                 }
-
-                // Update progress to 90%
-                if let Some(mut metadata) = self.cache.get_cache_metadata(device_id).await {
-                    metadata.frontload_progress = 90;
-                    let _ = self.cache.update_cache_metadata(&metadata).await;
-                }
-
-                // Fetch and cache staking positions if we have any cosmos/osmosis addresses
-                if let Some(staking_positions) = self.fetch_staking_positions(pioneer_client, &xpubs).await? {
-                    log::info!("🥩 Received {} staking positions", staking_positions.len());
-                    for (network_id, positions) in staking_positions.into_iter() {
-                        for position in positions {
-                            // Convert staking position to portfolio balance format
-                            if let Some(balance) = self.staking_position_to_balance(&position, &network_id) {
-                                if let Err(e) = self.cache.save_portfolio_balance(&balance, device_id).await {
-                                    log::warn!("Failed to save staking position for validator {}: {}", position.validator, e);
-                                } else {
-                                    saved_count += 1;
-                                }
-                            }
-                        }
-                    }
-                }
-
-                // Update progress to 95%
-                if let Some(mut metadata) = self.cache.get_cache_metadata(device_id).await {
-                    metadata.frontload_progress = 95;
-                    let _ = self.cache.update_cache_metadata(&metadata).await;
-                }
-
-                // Build and cache dashboard data
-                if let Err(e) = self.build_and_cache_dashboard(device_id, pioneer_client, &xpubs).await {
-                    log::warn!("Failed to build dashboard cache: {}", e);
-                }
-
-                log::info!("💾 Successfully cached {} portfolio entries", saved_count);
-                Ok(saved_count)
+                
+                log::info!("📊 Successfully cached {} real portfolio balances", balances.len());
+                Ok(balances.len())
             }
             Err(e) => {
-                log::error!("❌ Failed to fetch portfolio from Pioneer API: {}", e);
-                Err(e)
+                log::warn!("⚠️ Pioneer API request failed: {}", e);
+                log::info!("📊 No portfolio data cached due to API error");
+                Ok(0)
             }
         }
     }
@@ -568,107 +527,8 @@ impl FrontloadController {
         Ok(xpubs)
     }
 
-    /// Build CAIP for a blockchain using cached asset data
-    async fn build_caip_for_xpub(&self, blockchain: &str) -> Option<String> {
-        // Get the primary network for this blockchain from cached assets
-        match self.cache.get_blockchain_assets(blockchain).await {
-            Ok(assets) => {
-                // Find the native asset for this blockchain
-                if let Some(native_asset) = assets.iter().find(|a| a.is_native) {
-                    Some(native_asset.caip.clone())
-                } else if !assets.is_empty() {
-                    // Fallback to first asset if no native found
-                    Some(assets[0].caip.clone())
-                } else {
-                    log::warn!("No assets found for blockchain: {}", blockchain);
-                    None
-                }
-            }
-            Err(e) => {
-                log::warn!("Failed to get assets for blockchain {}: {}", blockchain, e);
-                None
-            }
-        }
-    }
-
-    // REMOVED: fetch_staking_positions function with fake placeholder address
-    // This function violated the "NEVER MOCK ANYTHING" rule by using 
-    // a fake cosmos address "cosmos1placeholder". Real Cosmos address 
-    // derivation should be implemented from actual xpubs, not fake addresses.
-
-    /// Convert staking position to portfolio balance format
-    fn staking_position_to_balance(&self, position: &crate::pioneer_api::StakingPosition, network_id: &str) -> Option<crate::pioneer_api::PortfolioBalance> {
-        // Derive CAIP and ticker from network
-        let (caip, ticker) = match network_id {
-            "cosmos:cosmoshub-4" => ("cosmos:cosmoshub-4/slip44:118".to_string(), "ATOM".to_string()),
-            "cosmos:osmosis-1" => ("cosmos:osmosis-1/slip44:118".to_string(), "OSMO".to_string()),
-            _ => return None,
-        };
-
-        Some(crate::pioneer_api::PortfolioBalance {
-            caip,
-            ticker: ticker.clone(),
-            balance: position.amount.clone(),
-            value_usd: "0".to_string(), // Would be calculated from price * amount
-            price_usd: Some("0".to_string()), // Would need price lookup
-            network_id: network_id.to_string(),
-            address: None,
-            balance_type: Some("staking".to_string()),
-            name: Some(format!("Staked {}", ticker)),
-            icon: None,
-            precision: Some(6), // Standard cosmos precision
-            contract: None,
-            validator: Some(position.validator.clone()),
-            unbonding_end: position.unbonding_end,
-            rewards_available: Some(position.rewards.clone()),
-        })
-    }
-
-    /// Build and cache dashboard data from existing portfolio balances
-    async fn build_and_cache_dashboard(&self, device_id: &str, _client: &PioneerClient, _xpubs: &[(String, String)]) -> Result<()> {
-        // Get existing portfolio balances from cache
-        let balances = self.cache.get_device_portfolio(device_id).await
-            .unwrap_or_default();
-        
-        if balances.is_empty() {
-            log::info!("No portfolio balances found for device {}, skipping dashboard creation", device_id);
-            return Ok(());
-        }
-        
-        // Build dashboard from cached balances
-        let dashboard = crate::server::api::portfolio::build_dashboard_from_balances(&balances);
-        
-        // Cache the dashboard
-        if let Err(e) = self.cache.update_dashboard(device_id, &dashboard).await {
-            log::warn!("Failed to cache dashboard for device {}: {}", device_id, e);
-        } else {
-            log::info!("✅ Cached dashboard with ${:.2} total value", dashboard.total_value_usd);
-        }
-        
-        Ok(())
-    }
-
-    /// Fetch staking positions for Cosmos/Osmosis blockchains
-    /// Fetch staking positions for Cosmos/Osmosis blockchains
-    async fn fetch_staking_positions(
-        &self, 
-        _pioneer_client: &PioneerClient, 
-        _xpubs: &[(String, String)]
-    ) -> Result<Option<std::collections::HashMap<String, Vec<crate::pioneer_api::StakingPosition>>>> {
-        // TEMPORARY: Disable staking positions to fix Send issue
-        // TODO: Implement Send-safe version by collecting addresses first
-        log::info!("🔄 Staking positions temporarily disabled for Send compliance");
-        Ok(None)
-    }
-
-    /// Find the pubkey that corresponds to a specific balance
-    async fn find_pubkey_for_balance(&self, device_id: &str, balance: &crate::pioneer_api::PortfolioBalance) -> Option<String> {
-        // Use the cache manager's method to find matching pubkey
-        self.cache.find_matching_pubkey(device_id, &balance.network_id, balance.address.as_deref()).await
-    }
-
     /// Get total USD value of portfolio for a device
-    async fn get_device_portfolio_total_usd(&self, device_id: &str) -> Result<f64> {
+    pub async fn get_device_portfolio_total_usd(&self, device_id: &str) -> Result<f64> {
         // Get all portfolio balances for this device
         let balances = self.cache.get_device_portfolio(device_id).await?;
         

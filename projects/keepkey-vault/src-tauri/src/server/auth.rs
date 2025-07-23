@@ -6,8 +6,9 @@ use axum::{
 use std::sync::Arc;
 use serde::{Serialize, Deserialize};
 use utoipa::ToSchema;
+use uuid;
 
-use super::ServerState;
+use crate::server::ServerState;
 
 #[derive(Deserialize, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
@@ -40,9 +41,9 @@ pub struct AuthResponse {
 pub async fn auth_verify(
     State(_state): State<Arc<ServerState>>,
 ) -> Result<Json<AuthResponse>, StatusCode> {
-    // For now, return a dummy API key
+    // Generate unique API key for this verification
     Ok(Json(AuthResponse {
-        api_key: "keepkey-vault-api-key".to_string(),
+        api_key: uuid::Uuid::new_v4().to_string(),
     }))
 }
 
@@ -60,8 +61,8 @@ pub async fn auth_pair(
     State(_state): State<Arc<ServerState>>,
     Json(_pairing_info): Json<PairingInfo>,
 ) -> Result<Json<AuthResponse>, StatusCode> {
-    // For now, return a dummy API key
+    // Generate unique API key for this pairing
     Ok(Json(AuthResponse {
-        api_key: "keepkey-vault-api-key".to_string(),
+        api_key: uuid::Uuid::new_v4().to_string(),
     }))
 } 
