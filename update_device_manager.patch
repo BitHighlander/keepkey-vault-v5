@@ -1,0 +1,67 @@
+--- a/projects/keepkey-vault/src/components/DeviceUpdateManager.tsx
++++ b/projects/keepkey-vault/src/components/DeviceUpdateManager.tsx
+@@ -26,6 +26,8 @@
+   const [retryCount, setRetryCount] = useState(0)
+   const [hasCompletedOnce, setHasCompletedOnce] = useState(false)
+   
++  // Track temporary disconnections
++  const [temporarilyDisconnected, setTemporarilyDisconnected] = useState(false)
+   // Get device invalid state dialog hook
+   const deviceInvalidStateDialog = useDeviceInvalidStateDialog()
+ 
+@@ -231,16 +233,38 @@
+ 
+       // Listen for device invalid state (timeout) errors
+       const invalidStateUnsubscribe = listen<{
+         deviceId: string
+         error: string
+         errorType: string
+         status: string
+       }>('device:invalid-state', (event) => {
+         console.log('⏱️ Device invalid state detected:', event.payload)
+         
++        // Check if this is a transient error
++        const isTransient = event.payload.error.includes('Device operation timed out') ||
++                          event.payload.error.includes('temporarily unavailable');
++        
++        if (isTransient) {
++          console.log('📋 Treating as transient error - not showing dialog');
++          setTemporarilyDisconnected(true);
++          
++          // Set a timeout to show dialog if not reconnected
++          setTimeout(() => {
++            if (temporarilyDisconnected) {
++              // Now show the dialog
++              showInvalidStateDialog(event.payload);
++            }
++          }, 10000); // 10 second grace period
++          
++          return;
++        }
++        
++        // Non-transient error - show dialog immediately
++        showInvalidStateDialog(event.payload);
++      })
++      
++      const showInvalidStateDialog = (payload: any) => {
+         // CRITICAL: Clear ALL existing dialogs first
+         setShowBootloaderUpdate(false)
+         setShowFirmwareUpdate(false)
+         setShowWalletCreation(false)
+@@ -308,6 +332,18 @@
++
++      // Listen for device reconnection
++      const reconnectedUnsubscribe = listen<{
++        deviceId: string
++        wasTemporary: boolean
++      }>('device:reconnected', (event) => {
++        console.log('🔄 Device reconnected:', event.payload)
++        
++        if (event.payload.wasTemporary) {
++          setTemporarilyDisconnected(false)
++          console.log('✅ Temporary disconnection resolved')
++        }
++      })
+ 
+       // Listen for device disconnection
+       const disconnectedUnsubscribe = listen<string>('device:disconnected', (event) => {

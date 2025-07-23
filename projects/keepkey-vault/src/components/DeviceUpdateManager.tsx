@@ -26,6 +26,10 @@ export const DeviceUpdateManager = ({ onComplete }: DeviceUpdateManagerProps) =>
   const [retryCount, setRetryCount] = useState(0)
   const [hasCompletedOnce, setHasCompletedOnce] = useState(false)
   
+  // Track temporary disconnections
+  const [temporarilyDisconnected, setTemporarilyDisconnected] = useState(false)
+  const [disconnectionTimeout, setDisconnectionTimeout] = useState<NodeJS.Timeout | null>(null)
+  
   // Get device invalid state dialog hook
   const deviceInvalidStateDialog = useDeviceInvalidStateDialog()
 
@@ -239,6 +243,38 @@ export const DeviceUpdateManager = ({ onComplete }: DeviceUpdateManagerProps) =>
       }>('device:invalid-state', (event) => {
         console.log('⏱️ Device invalid state detected:', event.payload)
         
+        // Check if this is a transient error that should be handled gracefully
+        const isTransient = event.payload.error.includes('Device operation timed out') ||
+                          event.payload.error.includes('temporarily unavailable') ||
+                          event.payload.error.includes('Device not found') ||
+                          event.payload.error.includes('Communication Timeout')
+        
+        if (isTransient) {
+          console.log('📋 Treating as transient error - applying grace period')
+          setTemporarilyDisconnected(true)
+          
+          // Clear any existing timeout
+          if (disconnectionTimeout) {
+            clearTimeout(disconnectionTimeout)
+          }
+          
+          // Set a timeout to show dialog if not reconnected within grace period
+          const timeout = setTimeout(() => {
+            if (temporarilyDisconnected) {
+              console.log('⏰ Grace period expired - showing invalid state dialog')
+              showInvalidStateDialog(event.payload)
+            }
+          }, 10000) // 10 second grace period
+          
+          setDisconnectionTimeout(timeout)
+          return
+        }
+        
+        // Non-transient error - show dialog immediately
+        showInvalidStateDialog(event.payload)
+      })
+      
+      const showInvalidStateDialog = (payload: any) => {
         // CRITICAL: Clear ALL existing dialogs first
         setShowBootloaderUpdate(false)
         setShowFirmwareUpdate(false)
@@ -251,14 +287,14 @@ export const DeviceUpdateManager = ({ onComplete }: DeviceUpdateManagerProps) =>
         
         // Show the simple invalid state dialog
         deviceInvalidStateDialog.show({
-          deviceId: event.payload.deviceId,
-          error: event.payload.error,
+          deviceId: payload.deviceId,
+          error: payload.error,
           onDialogClose: () => {
             console.log('Invalid state dialog closed - user should reconnect device')
             // Device status will be updated when device reconnects
           }
         })
-      })
+      }
 
       // Listen for PIN unlock needed events
       const pinUnlockUnsubscribe = listen<{
@@ -307,6 +343,31 @@ export const DeviceUpdateManager = ({ onComplete }: DeviceUpdateManagerProps) =>
         }
       })
 
+      // Listen for device reconnection
+      const reconnectedUnsubscribe = listen<{
+        deviceId: string
+        wasTemporary: boolean
+      }>('device:reconnected', (event) => {
+        console.log('🔄 Device reconnected:', event.payload)
+        
+        if (event.payload.wasTemporary) {
+          console.log('✅ Temporary disconnection resolved')
+          setTemporarilyDisconnected(false)
+          
+          // Clear the grace period timeout
+          if (disconnectionTimeout) {
+            clearTimeout(disconnectionTimeout)
+            setDisconnectionTimeout(null)
+          }
+          
+          // If invalid state dialog is showing for this device, hide it
+          if (deviceInvalidStateDialog.isShowing(event.payload.deviceId)) {
+            console.log('🔄 Hiding invalid state dialog due to reconnection')
+            deviceInvalidStateDialog.hide(event.payload.deviceId)
+          }
+        }
+      })
+
       // Listen for device disconnection
       const disconnectedUnsubscribe = listen<string>('device:disconnected', (event) => {
         const disconnectedDeviceId = event.payload;
@@ -344,8 +405,10 @@ export const DeviceUpdateManager = ({ onComplete }: DeviceUpdateManagerProps) =>
         ;(await accessErrorUnsubscribe)()
         ;(await invalidStateUnsubscribe)()
         ;(await pinUnlockUnsubscribe)()
+        ;(await reconnectedUnsubscribe)()
         ;(await disconnectedUnsubscribe)()
         if (timeoutId) clearTimeout(timeoutId)
+        if (disconnectionTimeout) clearTimeout(disconnectionTimeout)
       }
     }
 

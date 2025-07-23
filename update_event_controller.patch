@@ -1,0 +1,111 @@
+--- a/projects/keepkey-vault/src-tauri/src/event_controller.rs
++++ b/projects/keepkey-vault/src-tauri/src/event_controller.rs
+@@ -5,10 +5,23 @@
+ use tokio::time::interval;
+ use tokio_util::sync::CancellationToken;
+ 
+ // Device operation timeout - matches the timeout used in commands.rs
+ const DEVICE_OPERATION_TIMEOUT_SECS: u64 = 30;
++// Grace period before treating device as truly disconnected
++const DEVICE_DISCONNECTION_GRACE_PERIOD_SECS: u64 = 10;
++
++#[derive(Clone)]
++struct DeviceConnectionInfo {
++    device: FriendlyUsbDevice,
++    disconnected_at: Option<std::time::Instant>,
++}
+ 
+ pub struct EventController {
+     cancellation_token: CancellationToken,
+     task_handle: Option<tauri::async_runtime::JoinHandle<()>>,
+     is_running: bool,
++    // Track devices with connection state
++    known_devices: Arc<Mutex<HashMap<String, DeviceConnectionInfo>>>,
+ }
+ 
+@@ -30,8 +43,10 @@
+             println!("🚀 Starting event controller task...");
+             
+             let mut interval = interval(Duration::from_millis(500));
+-            let mut last_devices: Vec<FriendlyUsbDevice> = vec![];
++            let known_devices = Arc::new(Mutex::new(HashMap::new()));
++            let known_devices_clone = known_devices.clone();
+             
++            self.known_devices = known_devices_clone;
+             
+             loop {
+                 tokio::select! {
+@@ -42,12 +57,67 @@
+                     _ = interval.tick() => {
+                         // Get current devices using high-level API
+                         let current_devices = keepkey_rust::features::list_connected_devices();
++                        let mut known = known_devices.lock().unwrap();
+                         
+-                        // Check for newly connected devices
++                        // Update connection state for all currently connected devices
+                         for device in &current_devices {
+-                            if !last_devices.iter().any(|d| d.unique_id == device.unique_id) {
++                            let device_key = device.serial_number.as_ref()
++                                .unwrap_or(&device.unique_id)
++                                .clone();
++                            
++                            if let Some(info) = known.get_mut(&device_key) {
++                                // Device was known - check if it was temporarily disconnected
++                                if info.disconnected_at.is_some() {
++                                    println!("🔄 Device {} reconnected (was temporarily disconnected)", device_key);
++                                    info.disconnected_at = None;
++                                    info.device = device.clone();
+                                    
++                                    // Emit reconnection event
++                                    let _ = app_handle.emit("device:reconnected", serde_json::json!({
++                                        "deviceId": device.unique_id,
++                                        "wasTemporary": true
++                                    }));
++                                }
++                            } else {
++                                // New device
+                                 println!("🔌 Device connected: {} (VID: 0x{:04x}, PID: 0x{:04x})", 
+                                          device.unique_id, device.vid, device.pid);
+                                         
++                                known.insert(device_key.clone(), DeviceConnectionInfo {
++                                    device: device.clone(),
++                                    disconnected_at: None,
++                                });
++                                
++                                // Continue with existing connection logic...
++                            }
++                        }
++                        
++                        // Check for disconnected devices
++                        let current_keys: HashSet<String> = current_devices.iter()
++                            .map(|d| d.serial_number.as_ref().unwrap_or(&d.unique_id).clone())
++                            .collect();
++                            
++                        for (device_key, info) in known.iter_mut() {
++                            if !current_keys.contains(device_key) {
++                                // Device not in current list
++                                if info.disconnected_at.is_none() {
++                                    // First time noticing disconnection
++                                    println!("⏱️ Device {} temporarily disconnected", device_key);
++                                    info.disconnected_at = Some(std::time::Instant::now());
+                                    
++                                    // Don't emit disconnection yet - wait for grace period
++                                } else if let Some(disconnected_at) = info.disconnected_at {
++                                    // Check if grace period has expired
++                                    if disconnected_at.elapsed() > Duration::from_secs(DEVICE_DISCONNECTION_GRACE_PERIOD_SECS) {
++                                        println!("🔌❌ Device {} disconnected (grace period expired)", device_key);
+                                        
++                                        // Now emit the disconnection event
++                                        let _ = app_handle.emit("device:disconnected", &info.device.unique_id);
+                                        
++                                        // Device will be removed from known devices later
++                                    }
++                                }
++                            }
++                        }
++                        
++                        // Clean up devices that have been disconnected for too long
++                        known.retain(|_, info| {
++                            info.disconnected_at.is_none() || 
++                            info.disconnected_at.unwrap().elapsed() <= Duration::from_secs(DEVICE_DISCONNECTION_GRACE_PERIOD_SECS)
++                        });

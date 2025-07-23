@@ -3,6 +3,7 @@ pub mod context;
 pub mod auth;
 pub mod api;
 pub mod proxy;
+pub mod portfolio_unified;
 
 use axum::{
     Router,
@@ -201,11 +202,18 @@ pub async fn start_server(device_queue_manager: crate::commands::DeviceQueueMana
         .route("/api/portfolio", get(api::portfolio::get_combined_portfolio))
         .route("/api/portfolio/:device_id", get(api::portfolio::get_device_portfolio))
         
+        // Unified portfolio endpoint for all devices
+        .route("/api/v1/portfolio/all", get(portfolio_unified::get_unified_portfolio))
+        
         // Cache endpoints
         .route("/api/cache/status", get(api::cache::get_cache_status))
         
         // Pubkey batch endpoints for performance optimization
         .route("/api/pubkeys/batch", post(api::pubkeys::batch_get_pubkeys))
+        
+        // Wallet bootstrap endpoints for offline-first architecture
+        .route("/api/v1/wallet/bootstrap", post(api::wallet::wallet_bootstrap))
+        .route("/api/v1/health/fast", get(api::wallet::fast_health_check))
         
         // Merge swagger UI first
         .merge(swagger_ui)

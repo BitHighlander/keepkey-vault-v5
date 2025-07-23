@@ -5,12 +5,14 @@ use tauri::http::{Response, Method, StatusCode};
 
 mod commands;
 mod device;
+mod device_identity;
 mod event_controller;
 mod logging;
 mod slip132;
 mod server;
 mod cache;
 mod pioneer_api;
+mod usb_resilience;
 
 // Re-export commonly used types
 

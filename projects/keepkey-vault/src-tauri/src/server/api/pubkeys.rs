@@ -57,7 +57,7 @@ pub async fn batch_get_pubkeys(
     let mut cached_count = 0;
     
     // Look up each path in the SQLite cache
-    for (index, path_request) in request.paths.iter().enumerate() {
+    for (_index, path_request) in request.paths.iter().enumerate() {
         // Convert address_n to BIP32 path string for lookup
         let bip32_path = address_n_to_bip32(&path_request.address_n);
         

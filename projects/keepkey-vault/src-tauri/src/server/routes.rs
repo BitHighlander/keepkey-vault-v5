@@ -187,7 +187,7 @@ pub async fn api_list_devices(State(state): State<Arc<ServerState>>) -> Result<J
             };
             
             // Try to get features in background (non-blocking for API response)
-            match tokio::time::timeout(std::time::Duration::from_secs(5), queue_handle.get_features()).await {
+            match tokio::time::timeout(std::time::Duration::from_secs(30), queue_handle.get_features()).await {
                 Ok(Ok(features)) => {
                     log::info!("📋 Background GetFeatures completed for device {}: {} v{}.{}.{}", 
                         device_id,

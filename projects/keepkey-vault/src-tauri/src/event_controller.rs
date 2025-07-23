@@ -1,14 +1,28 @@
 use keepkey_rust::friendly_usb::FriendlyUsbDevice;
+use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Manager};
 use tokio::time::interval;
 use tokio_util::sync::CancellationToken;
+
+// Device operation timeout - matches the timeout used in commands.rs
+const DEVICE_OPERATION_TIMEOUT_SECS: u64 = 30;
+// Grace period before treating device as truly disconnected
+const DEVICE_DISCONNECTION_GRACE_PERIOD_SECS: u64 = 10;
+
+#[derive(Clone)]
+struct DeviceConnectionInfo {
+    device: FriendlyUsbDevice,
+    disconnected_at: Option<Instant>,
+}
 
 pub struct EventController {
     cancellation_token: CancellationToken,
     task_handle: Option<tauri::async_runtime::JoinHandle<()>>,
     is_running: bool,
+    // Track devices with connection state
+    known_devices: Arc<Mutex<HashMap<String, DeviceConnectionInfo>>>,
 }
 
 impl EventController {
@@ -17,6 +31,7 @@ impl EventController {
             cancellation_token: CancellationToken::new(),
             task_handle: None,
             is_running: false,
+            known_devices: Arc::new(Mutex::new(HashMap::new())),
         }
     }
     
@@ -28,6 +43,8 @@ impl EventController {
         
         let app_handle = app.clone();
         let cancellation_token = self.cancellation_token.clone();
+        
+        let known_devices = self.known_devices.clone();
         
         let task_handle = tauri::async_runtime::spawn(async move {
             let mut interval = interval(Duration::from_millis(1000)); // Check every second
@@ -64,6 +81,8 @@ impl EventController {
 //                 }
 //             });
             
+            println!("🔍 DEBUG: Starting event controller main loop");
+            let mut loop_count = 0;
             loop {
                 tokio::select! {
                     _ = cancellation_token.cancelled() => {
@@ -71,12 +90,54 @@ impl EventController {
                         break;
                     }
                     _ = interval.tick() => {
+                        loop_count += 1;
+                        if loop_count % 10 == 0 {
+                            println!("🔍 DEBUG: Event loop still running - iteration {}", loop_count);
+                        }
+                        
                         // Get current devices using high-level API
                         let current_devices = keepkey_rust::features::list_connected_devices();
+                        println!("🔍 DEBUG: Device scan #{} - found {} devices", loop_count, current_devices.len());
                         
-                        // Check for newly connected devices
+                        // Track device connections and reconnections
+                        {
+                            let mut known = known_devices.lock().unwrap();
+                            for device in &current_devices {
+                                let device_key = device.serial_number.as_ref()
+                                    .unwrap_or(&device.unique_id)
+                                    .clone();
+                                
+                                if let Some(info) = known.get_mut(&device_key) {
+                                    // Device was known - check if it was temporarily disconnected
+                                    if info.disconnected_at.is_some() {
+                                        println!("🔄 Device {} reconnected (was temporarily disconnected)", device_key);
+                                        info.disconnected_at = None;
+                                        info.device = device.clone();
+                                        
+                                        // Emit reconnection event
+                                        let _ = app_handle.emit("device:reconnected", serde_json::json!({
+                                            "deviceId": device.unique_id,
+                                            "wasTemporary": true
+                                        }));
+                                        continue; // Skip new device processing
+                                    }
+                                } else {
+                                    // New device - add to tracking
+                                    known.insert(device_key.clone(), DeviceConnectionInfo {
+                                        device: device.clone(),
+                                        disconnected_at: None,
+                                    });
+                                }
+                            }
+                        }
+                        
+                        // Check for newly connected devices (original logic)
+                        println!("🔍 DEBUG: Checking {} current devices against {} last devices", current_devices.len(), last_devices.len());
                         for device in &current_devices {
-                            if !last_devices.iter().any(|d| d.unique_id == device.unique_id) {
+                            let is_new = !last_devices.iter().any(|d| d.unique_id == device.unique_id);
+                            println!("🔍 DEBUG: Device {} - is_new: {}", device.unique_id, is_new);
+                            
+                            if is_new {
                                 println!("🔌 Device connected: {} (VID: 0x{:04x}, PID: 0x{:04x})", 
                                          device.unique_id, device.vid, device.pid);
                                 println!("   Device info: {} - {}", 
@@ -120,23 +181,27 @@ impl EventController {
                                 }
                                 
                                 // Emit basic device connected event first
+                                println!("🔍 DEBUG: About to emit device:connected event");
                                 let _ = app_handle.emit("device:connected", device);
+                                println!("🔍 DEBUG: device:connected event emitted");
                                 
                                 // Proactively fetch features and emit device:ready when successful
-                                let app_for_task = app_handle.clone();
-                                let device_for_task = device.clone();
-                                tokio::spawn(async move {
-                                    println!("📡 Fetching device features for: {}", device_for_task.unique_id);
-                                    
-                                    // Emit getting features status
-                                    println!("📡 Emitting status: Getting features...");
-                                    if let Err(e) = app_for_task.emit("status:update", serde_json::json!({
-                                        "status": "Getting features..."
-                                    })) {
-                                        println!("❌ Failed to emit getting features status: {}", e);
-                                    }
-                                    
-                                    match try_get_device_features(&device_for_task, &app_for_task).await {
+                                // DIRECT EXECUTION - NO SPAWNING
+                                println!("📡 Fetching device features for: {}", device.unique_id);
+                                
+                                // Emit getting features status
+                                println!("📡 Emitting status: Getting features...");
+                                if let Err(e) = app_handle.emit("status:update", serde_json::json!({
+                                    "status": "Getting features..."
+                                })) {
+                                    println!("❌ Failed to emit getting features status: {}", e);
+                                }
+                                
+                                // Clone what we need for the async block
+                                let device_for_features = device.clone();
+                                let app_for_features = app_handle.clone();
+                                
+                                match try_get_device_features(&device_for_features, &app_for_features).await {
                                         Ok(features) => {
                                             let device_label = features.label.as_deref().unwrap_or("Unlabeled");
                                             let device_version = &features.version;
@@ -144,11 +209,11 @@ impl EventController {
                                             println!("📡 Got device features: {} v{} ({})", 
                                                    device_label,
                                                    device_version,
-                                                   device_for_task.unique_id);
+                                                   device_for_features.unique_id);
                                             
                                             // Emit device info status
                                             println!("📡 Emitting status: {} v{}", device_label, device_version);
-                                            if let Err(e) = app_for_task.emit("status:update", serde_json::json!({
+                                            if let Err(e) = app_for_features.emit("status:update", serde_json::json!({
                                                 "status": format!("{} v{}", device_label, device_version)
                                             })) {
                                                 println!("❌ Failed to emit device info status: {}", e);
@@ -156,7 +221,7 @@ impl EventController {
                                             
                                             // Evaluate device status to determine if updates are needed
                                             let status = crate::commands::evaluate_device_status(
-                                                device_for_task.unique_id.clone(), 
+                                                device_for_features.unique_id.clone(), 
                                                 Some(&features)
                                             );
                                             
@@ -176,28 +241,28 @@ impl EventController {
                             if is_actually_ready {
                                                 println!("✅ Device is fully ready, emitting device:ready event");
                                                 println!("📡 Emitting status: Device ready");
-                                                if let Err(e) = app_for_task.emit("status:update", serde_json::json!({
+                                                if let Err(e) = app_for_features.emit("status:update", serde_json::json!({
                                                     "status": "Device ready"
                                                 })) {
                                                     println!("❌ Failed to emit device ready status: {}", e);
                                                 }
                                                                                 let ready_payload = serde_json::json!({
-                                    "device": device_for_task,
+                                    "device": device_for_features,
                                     "features": features,
                                     "status": "ready"
                                 });
                                 
                                 // Queue device:ready event as it's important for wallet initialization
-                                if let Err(e) = crate::commands::emit_or_queue_event(&app_for_task, "device:ready", ready_payload).await {
+                                if let Err(e) = crate::commands::emit_or_queue_event(&app_for_features, "device:ready", ready_payload).await {
                                     println!("❌ Failed to emit/queue device:ready event: {}", e);
                                 } else {
-                                    println!("📡 Successfully emitted/queued device:ready for {}", device_for_task.unique_id);
+                                    println!("📡 Successfully emitted/queued device:ready for {}", device_for_features.unique_id);
                                     
                                     // 🚀 Trigger automatic frontload for ready devices
-                                    println!("🚀 Device {} is ready, starting automatic frontload...", device_for_task.unique_id);
+                                    println!("🚀 Device {} is ready, starting automatic frontload...", device_for_features.unique_id);
                                     
-                                    let device_id_for_frontload = device_for_task.unique_id.clone();
-                                    let app_for_frontload = app_for_task.clone();
+                                    let device_id_for_frontload = device_for_features.unique_id.clone();
+                                    let app_for_frontload = app_for_features.clone();
                                     
                                     tauri::async_runtime::spawn(async move {
                                         println!("🔄 Starting automatic frontload for device: {}", device_id_for_frontload);
@@ -262,17 +327,17 @@ impl EventController {
                                                     println!("🔒 Device is initialized but locked with PIN - emitting unlock event");
                                                     
                                                     // Emit PIN unlock needed event
-                                                    let pin_unlock_payload = serde_json::json!({
-                                                        "deviceId": device_for_task.unique_id,
+                                                                                                    let pin_unlock_payload = serde_json::json!({
+                                                "deviceId": device_for_features.unique_id,
                                                         "features": features,
                                                         "status": status,
                                                         "needsPinUnlock": true
                                                     });
                                                     
-                                                    if let Err(e) = crate::commands::emit_or_queue_event(&app_for_task, "device:pin-unlock-needed", pin_unlock_payload).await {
+                                                    if let Err(e) = crate::commands::emit_or_queue_event(&app_for_features, "device:pin-unlock-needed", pin_unlock_payload).await {
                                                         println!("❌ Failed to emit/queue device:pin-unlock-needed event: {}", e);
                                                     } else {
-                                                        println!("📡 Successfully emitted/queued device:pin-unlock-needed for {}", device_for_task.unique_id);
+                                                        println!("📡 Successfully emitted/queued device:pin-unlock-needed for {}", device_for_features.unique_id);
                                                     }
                                                 }
                                                 
@@ -298,7 +363,7 @@ impl EventController {
                                                 };
                                                 
                                                 println!("📡 Emitting status: {}", status_message);
-                                                if let Err(e) = app_for_task.emit("status:update", serde_json::json!({
+                                                if let Err(e) = app_for_features.emit("status:update", serde_json::json!({
                                                     "status": status_message
                                                 })) {
                                                     println!("❌ Failed to emit update status: {}", e);
@@ -308,19 +373,19 @@ impl EventController {
                                                                         // Emit device:features-updated event with evaluated status (for DeviceUpdateManager)
                             // This is a critical event that should be queued if frontend isn't ready
                             let features_payload = serde_json::json!({
-                                "deviceId": device_for_task.unique_id,
-                                "features": features,
-                                "status": status  // Use evaluated status instead of hardcoded "ready"
+                                                                                "deviceId": device_for_features.unique_id,
+                                                "features": features,
+                                                "status": status  // Use evaluated status instead of hardcoded "ready"
                             });
                             
-                            if let Err(e) = crate::commands::emit_or_queue_event(&app_for_task, "device:features-updated", features_payload).await {
+                                                                            if let Err(e) = crate::commands::emit_or_queue_event(&app_for_features, "device:features-updated", features_payload).await {
                                 println!("❌ Failed to emit/queue device:features-updated event: {}", e);
                             } else {
-                                println!("📡 Successfully emitted/queued device:features-updated for {}", device_for_task.unique_id);
+                                                                                println!("📡 Successfully emitted/queued device:features-updated for {}", device_for_features.unique_id);
                             }
                                         }
                                         Err(e) => {
-                                            println!("❌ Failed to get features for {}: {}", device_for_task.unique_id, e);
+                                            println!("❌ Failed to get features for {}: {}", device_for_features.unique_id, e);
                                             
                                             // Check for timeout errors specifically
                                             if e.contains("Timeout while fetching device features") {
@@ -329,20 +394,20 @@ impl EventController {
                                                 
                                                 // Log detailed error for debugging
                                                 eprintln!("ERROR: Device timeout indicates invalid state - this should be prevented!");
-                                                eprintln!("Device ID: {}", device_for_task.unique_id);
+                                                eprintln!("Device ID: {}", device_for_features.unique_id);
                                                 eprintln!("Error: {}", e);
                                                 
                                                 // Emit device invalid state event for UI to handle
                                                 let invalid_state_payload = serde_json::json!({
-                                                    "deviceId": device_for_task.unique_id,
+                                                    "deviceId": device_for_features.unique_id,
                                                     "error": e,
                                                     "errorType": "DEVICE_TIMEOUT",
                                                     "status": "invalid_state"
                                                 });
-                                                let _ = app_for_task.emit("device:invalid-state", &invalid_state_payload);
+                                                let _ = app_for_features.emit("device:invalid-state", &invalid_state_payload);
                                                 
                                                 // Also emit status update
-                                                let _ = app_for_task.emit("status:update", serde_json::json!({
+                                                let _ = app_for_features.emit("status:update", serde_json::json!({
                                                     "status": "Device timeout - please reconnect"
                                                 }));
                                             }
@@ -373,22 +438,51 @@ impl EventController {
                                                 
                                                 // Emit device access error event
                                                 let error_payload = serde_json::json!({
-                                                    "deviceId": device_for_task.unique_id,
+                                                    "deviceId": device_for_features.unique_id,
                                                     "error": user_friendly_error,
                                                     "errorType": "DEVICE_CLAIMED",
                                                     "status": "error"
                                                 });
-                                                let _ = app_for_task.emit("device:access-error", &error_payload);
+                                                let _ = app_for_features.emit("device:access-error", &error_payload);
                                             }
                                         }
                                     }
-                                });
                             }
                         }
                         
-                        // Check for disconnected devices
+                        // Check for disconnected devices with grace period
+                        let mut known = known_devices.lock().unwrap();
                         for device in &last_devices {
                             if !current_devices.iter().any(|d| d.unique_id == device.unique_id) {
+                                // Check if this device has grace period tracking
+                                let device_key = device.serial_number.as_ref()
+                                    .unwrap_or(&device.unique_id)
+                                    .clone();
+                                
+                                if let Some(info) = known.get_mut(&device_key) {
+                                    if info.disconnected_at.is_none() {
+                                        // First time noticing disconnection - start grace period
+                                        println!("⏱️ Device {} temporarily disconnected - starting grace period", device.unique_id);
+                                        info.disconnected_at = Some(Instant::now());
+                                        continue; // Don't process as disconnected yet
+                                    } else if let Some(disconnected_at) = info.disconnected_at {
+                                        // Check if grace period has expired
+                                        if disconnected_at.elapsed() < Duration::from_secs(DEVICE_DISCONNECTION_GRACE_PERIOD_SECS) {
+                                            // Still in grace period
+                                            continue;
+                                        }
+                                        // Grace period expired - process as disconnected
+                                        println!("🔌❌ Device disconnected: {} (grace period expired)", device.unique_id);
+                                    }
+                                } else {
+                                    // Unknown device - add to tracking with disconnection time
+                                    known.insert(device_key, DeviceConnectionInfo {
+                                        device: device.clone(),
+                                        disconnected_at: Some(Instant::now()),
+                                    });
+                                    continue; // Start grace period for new device
+                                }
+                                
                                 println!("🔌❌ Device disconnected: {}", device.unique_id);
                                 
                                 // Check if device is in recovery flow before cleaning up
@@ -413,7 +507,7 @@ impl EventController {
                                     let device_id = device.unique_id.clone();
                                     // Clone the underlying Arc so it outlives this scope
                                     let queue_manager_arc = state.inner().clone();
-                                    tokio::spawn(async move {
+                                    tauri::async_runtime::spawn(async move {
                                         println!("♻️ Cleaning up device queue for disconnected device: {}", device_id);
                                         let mut manager = queue_manager_arc.lock().await;
                                         if let Some(handle) = manager.remove(&device_id) {
@@ -431,7 +525,7 @@ impl EventController {
                         if current_devices.is_empty() && !last_devices.is_empty() {
                             // After a short delay, go back to scanning
                             let app_for_scanning = app_handle.clone();
-                            tokio::spawn(async move {
+                            tauri::async_runtime::spawn(async move {
                                 tokio::time::sleep(Duration::from_millis(1000)).await;
                                 println!("📡 Emitting status: Scanning for devices... (after disconnect)");
                                 if let Err(e) = app_for_scanning.emit("status:update", serde_json::json!({
@@ -439,6 +533,20 @@ impl EventController {
                                 })) {
                                     println!("❌ Failed to emit scanning status after disconnect: {}", e);
                                 }
+                            });
+                        }
+                        
+                        // Clean up devices that have been disconnected for too long
+                        {
+                            let mut known = known_devices.lock().unwrap();
+                            known.retain(|device_key, info| {
+                                if let Some(disconnected_at) = info.disconnected_at {
+                                    if disconnected_at.elapsed() > Duration::from_secs(DEVICE_DISCONNECTION_GRACE_PERIOD_SECS * 2) {
+                                        println!("🧹 Removing device {} from tracking (disconnected too long)", device_key);
+                                        return false;
+                                    }
+                                }
+                                true
                             });
                         }
                         
@@ -469,7 +577,7 @@ impl EventController {
         if let Some(handle) = self.task_handle.take() {
             // Try to wait for completion with a timeout
             tauri::async_runtime::spawn(async move {
-                if let Err(e) = tokio::time::timeout(Duration::from_secs(5), handle).await {
+                                        if let Err(e) = tokio::time::timeout(Duration::from_secs(DEVICE_OPERATION_TIMEOUT_SECS), handle).await {
                     println!("⚠️ Event controller task did not stop within timeout: {}", e);
                 } else {
                     println!("✅ Event controller task stopped successfully");
@@ -522,7 +630,7 @@ async fn try_get_device_features(device: &FriendlyUsbDevice, app_handle: &AppHan
         }
         
         // Try to get features with a timeout using the shared worker
-        match tokio::time::timeout(Duration::from_secs(5), queue_handle.get_features()).await {
+        match tokio::time::timeout(Duration::from_secs(DEVICE_OPERATION_TIMEOUT_SECS), queue_handle.get_features()).await {
             Ok(Ok(raw_features)) => {
                 // Convert features to our DeviceFeatures format
                 let device_features = crate::commands::convert_features_to_device_features(raw_features);
@@ -574,7 +682,7 @@ async fn try_get_device_features(device: &FriendlyUsbDevice, app_handle: &AppHan
         );
         
         // Try to get features with a timeout
-        match tokio::time::timeout(Duration::from_secs(5), queue_handle.get_features()).await {
+        match tokio::time::timeout(Duration::from_secs(DEVICE_OPERATION_TIMEOUT_SECS), queue_handle.get_features()).await {
             Ok(Ok(raw_features)) => {
                 // Convert features to our DeviceFeatures format
                 let device_features = crate::commands::convert_features_to_device_features(raw_features);
