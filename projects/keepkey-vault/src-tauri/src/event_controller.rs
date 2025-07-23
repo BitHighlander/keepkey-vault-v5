@@ -275,9 +275,10 @@ impl EventController {
                                                     if let Some(queue_state) = app_for_frontload.try_state::<crate::commands::DeviceQueueManager>() {
                                                         let device_queue_manager = queue_state.inner().clone();
                                                         
-                                                        // Create frontload controller
+                                                        // Create frontload controller with cloned cache manager
+                                                        let cache_manager_for_controller = cache_manager.clone();
                                                         let frontload_controller = crate::cache::FrontloadController::new(
-                                                            cache_manager,
+                                                            cache_manager_for_controller,
                                                             device_queue_manager,
                                                         );
                                                         
@@ -291,6 +292,13 @@ impl EventController {
                                                                     "device_id": device_id_for_frontload,
                                                                     "success": true
                                                                 }));
+                                                                
+                                                                // 📊 LOG PORTFOLIO SUMMARY FOR ALL DEVICES
+                                                                tokio::spawn(async move {
+                                                                    if let Err(e) = log_all_devices_portfolio_summary(&cache_manager).await {
+                                                                        println!("⚠️ Failed to log portfolio summary: {}", e);
+                                                                    }
+                                                                });
                                                             }
                                                             Err(e) => {
                                                                 println!("⚠️ Automatic frontload failed for device {}: {}", device_id_for_frontload, e);
@@ -732,6 +740,62 @@ async fn try_oob_bootloader_detection(device: &FriendlyUsbDevice) -> Result<keep
         Ok(Err(e)) => Err(e),
         Err(e) => Err(format!("Task execution error: {}", e)),
     }
+}
+
+/// Helper function to log portfolio summary for all paired devices
+async fn log_all_devices_portfolio_summary(cache_manager: &std::sync::Arc<crate::cache::CacheManager>) -> Result<(), anyhow::Error> {
+    use anyhow::anyhow;
+    
+    // Get all device metadata from cache
+    let all_metadata = cache_manager.get_all_device_metadata().await.unwrap_or_default();
+    
+    if all_metadata.is_empty() {
+        println!("📊 No paired devices found in cache");
+        return Ok(());
+    }
+    
+    let mut total_portfolio_value = 0.0;
+    let mut device_summaries = Vec::new();
+    
+    for metadata in &all_metadata {
+        // Get portfolio balances for this device
+        let balances = cache_manager.get_device_portfolio(&metadata.device_id).await.unwrap_or_default();
+        
+        // Calculate total USD value for this device
+        let mut device_total = 0.0;
+        for balance in &balances {
+            if let Ok(value) = balance.value_usd.parse::<f64>() {
+                device_total += value;
+            }
+        }
+        
+        total_portfolio_value += device_total;
+        
+        let device_label = metadata.label.as_deref().unwrap_or("Unnamed KeepKey");
+        let device_short = &metadata.device_id[metadata.device_id.len().saturating_sub(8)..];
+        
+        device_summaries.push((device_label.to_string(), device_short.to_string(), device_total, balances.len()));
+    }
+    
+    // Log the summary
+    println!("📊 ===============================================");
+    println!("📊 PORTFOLIO SUMMARY - ALL PAIRED DEVICES");
+    println!("📊 ===============================================");
+    println!("💰 TOTAL PORTFOLIO VALUE: ${:.2} USD", total_portfolio_value);
+    println!("🔌 PAIRED DEVICES: {}", all_metadata.len());
+    println!("📊 ===============================================");
+    
+    for (label, device_short, value, balance_count) in device_summaries {
+        if value > 0.0 {
+            println!("   🏷️ {}: ${:.2} USD ({} assets) [{}]", label, value, balance_count, device_short);
+        } else {
+            println!("   🏷️ {}: $0.00 USD (no balances) [{}]", label, device_short);
+        }
+    }
+    
+    println!("📊 ===============================================");
+    
+    Ok(())
 }
 
 // Create and manage event controller with proper Arc<Mutex<>> wrapper

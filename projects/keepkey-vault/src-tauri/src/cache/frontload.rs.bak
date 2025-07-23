@@ -183,28 +183,15 @@ impl FrontloadController {
         };
         self.cache.update_cache_metadata(&final_metadata).await?;
         
-        // 💰 GET AND LOG PORTFOLIO USD VALUE 
-        let portfolio_value = self.get_device_portfolio_total_usd(device_id).await.unwrap_or(0.0);
-        let device_label = metadata.label.as_deref().unwrap_or("Unnamed KeepKey");
-        
         let elapsed = start_time.elapsed();
         log::info!("✅ Frontload completed for device {}", device_id);
         log::info!("   📊 Processed {} paths, cached {} addresses/pubkeys in {:.2}s", 
             total_paths, total_cached, elapsed.as_secs_f64());
-            
-        // 🎯 THE NUMBER THAT MATTERS - TOTAL USD VALUE
-        if portfolio_value > 0.0 {
-            log::info!("   💰 PORTFOLIO VALUE: ${:.2} USD", portfolio_value);
-            log::info!("   🏷️ Device: {} ({})", device_label, &device_id[device_id.len().saturating_sub(8)..]);
-        } else {
-            log::info!("   💰 PORTFOLIO VALUE: $0.00 USD (no balances or API unavailable)");
-            log::info!("   🏷️ Device: {} ({})", device_label, &device_id[device_id.len().saturating_sub(8)..]);
-        }
-        
         if !errors.is_empty() {
             log::warn!("   ⚠️ {} errors occurred: {}", errors.len(), errors.join("; "));
         }
         log::info!("   💾 Data stored in SQLite cache for fast access");
+        log::info!("   🏷️ Device: {}", metadata.label.as_deref().unwrap_or("Unnamed KeepKey"));
         
         Ok(())
     }
@@ -649,41 +636,75 @@ impl FrontloadController {
     }
 
     /// Fetch staking positions for Cosmos/Osmosis blockchains
-    /// Fetch staking positions for Cosmos/Osmosis blockchains
     async fn fetch_staking_positions(
         &self, 
-        _pioneer_client: &PioneerClient, 
-        _xpubs: &[(String, String)]
+        pioneer_client: &PioneerClient, 
+        xpubs: &[(String, String)]
     ) -> Result<Option<std::collections::HashMap<String, Vec<crate::pioneer_api::StakingPosition>>>> {
-        // TEMPORARY: Disable staking positions to fix Send issue
-        // TODO: Implement Send-safe version by collecting addresses first
-        log::info!("🔄 Staking positions temporarily disabled for Send compliance");
-        Ok(None)
+        // Get addresses for cosmos and osmosis chains
+        let db = self.cache.db.lock().await;
+        
+        // Query for cosmos/osmosis addresses that have corresponding xpubs
+        let mut stmt = db.prepare(
+            "SELECT DISTINCT cp.address, cp.coin_name, cp.xpub
+             FROM cached_pubkeys cp
+             WHERE cp.coin_name IN ('cosmos', 'osmosis')
+             AND cp.address IS NOT NULL 
+             AND cp.address != ''
+             AND cp.xpub IN (SELECT xpub FROM (VALUES (?1)) AS x(xpub))"
+        )?;
+        
+        // Build the xpub list for the query
+        let xpub_list: Vec<String> = xpubs.iter().map(|(xpub, _)| xpub.clone()).collect();
+        
+        let mut staking_map = std::collections::HashMap::new();
+        
+        for xpub in &xpub_list {
+            let addresses: Vec<(String, String)> = stmt.query_map([xpub], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })?
+            .filter_map(|r| r.ok())
+            .collect();
+            
+            for (address, blockchain) in addresses {
+                let network_id = match blockchain.as_str() {
+                    "cosmos" => "cosmos:cosmoshub-4",
+                    "osmosis" => "cosmos:osmosis-1",
+                    _ => continue,
+                };
+                
+                log::debug!("🔍 Fetching staking positions for {} address: {}", blockchain, address);
+                
+                match pioneer_client.get_staking_positions(network_id, &address).await {
+                    Ok(positions) if !positions.is_empty() => {
+                        log::info!("✅ Found {} staking positions for {}", positions.len(), address);
+                        staking_map.entry(network_id.to_string())
+                            .or_insert_with(Vec::new)
+                            .extend(positions);
+                    }
+                    Ok(_) => {
+                        log::debug!("No staking positions found for {}", address);
+                    }
+                    Err(e) => {
+                        log::warn!("Failed to fetch staking positions for {}: {}", address, e);
+                    }
+                }
+            }
+        }
+        
+        drop(stmt);
+        drop(db);
+        
+        if staking_map.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(staking_map))
+        }
     }
 
     /// Find the pubkey that corresponds to a specific balance
     async fn find_pubkey_for_balance(&self, device_id: &str, balance: &crate::pioneer_api::PortfolioBalance) -> Option<String> {
         // Use the cache manager's method to find matching pubkey
         self.cache.find_matching_pubkey(device_id, &balance.network_id, balance.address.as_deref()).await
-    }
-
-    /// Get total USD value of portfolio for a device
-    async fn get_device_portfolio_total_usd(&self, device_id: &str) -> Result<f64> {
-        // Get all portfolio balances for this device
-        let balances = self.cache.get_device_portfolio(device_id).await?;
-        
-        if balances.is_empty() {
-            return Ok(0.0);
-        }
-        
-        // Calculate total USD value
-        let mut total_usd = 0.0;
-        for balance in &balances {
-            if let Ok(value) = balance.value_usd.parse::<f64>() {
-                total_usd += value;
-            }
-        }
-        
-        Ok(total_usd)
     }
 } 

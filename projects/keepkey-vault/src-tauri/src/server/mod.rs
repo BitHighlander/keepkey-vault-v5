@@ -134,11 +134,11 @@ pub async fn start_server(device_queue_manager: crate::commands::DeviceQueueMana
     // Try to initialize tracing, ignore if already initialized
     let _ = tracing_subscriber::fmt::try_init();
     
-    // Create server state
+    // Create server state with all required components
     let server_state = Arc::new(ServerState {
-        device_queue_manager,
+        cache_manager: cache_manager.clone(),
+        device_queue_manager: device_queue_manager,
         app_handle: app_handle.clone(),
-        cache_manager,
     });
     
     // Create Swagger UI
@@ -293,6 +293,17 @@ pub async fn start_server(device_queue_manager: crate::commands::DeviceQueueMana
         Ok(()) => {
             info!("✅ Both servers started successfully and are ready");
             
+            // 📊 LOG STARTUP PORTFOLIO SUMMARY
+            let cache_manager_clone = cache_manager.clone();
+            tokio::spawn(async move {
+                // Wait a moment for cache to be fully ready
+                tokio::time::sleep(std::time::Duration::from_millis(2000)).await;
+                
+                if let Err(e) = log_startup_portfolio_summary(&cache_manager_clone).await {
+                    log::warn!("⚠️ Failed to log startup portfolio summary: {}", e);
+                }
+            });
+            
             // Emit success event to frontend only after both servers are confirmed ready
             match app_handle.emit("server:ready", serde_json::json!({
                 "status": "ready",
@@ -330,6 +341,79 @@ pub async fn start_server(device_queue_manager: crate::commands::DeviceQueueMana
     
     // Run the main API server
     serve(listener, app).await?;
+    
+    Ok(())
+}
+
+/// Log startup portfolio summary for all paired devices
+async fn log_startup_portfolio_summary(cache_manager: &std::sync::Arc<once_cell::sync::OnceCell<std::sync::Arc<crate::cache::CacheManager>>>) -> Result<(), anyhow::Error> {
+    use anyhow::anyhow;
+    
+    // Get cache manager
+    let cache = match cache_manager.get() {
+        Some(cache) => cache,
+        None => {
+            log::info!("📊 Cache not yet initialized - portfolio summary will be available after device connection");
+            return Ok(());
+        }
+    };
+    
+    // Get all device metadata from cache
+    let all_metadata = cache.get_all_device_metadata().await.unwrap_or_default();
+    
+    if all_metadata.is_empty() {
+        log::info!("📊 ==========================================");
+        log::info!("📊 VAULT STARTUP - NO PAIRED DEVICES FOUND");
+        log::info!("📊 ==========================================");
+        log::info!("💰 TOTAL PORTFOLIO VALUE: $0.00 USD");
+        log::info!("🔌 PAIRED DEVICES: 0");
+        log::info!("ℹ️  Connect a KeepKey device to see portfolio data");
+        log::info!("📊 ==========================================");
+        return Ok(());
+    }
+    
+    let mut total_portfolio_value = 0.0;
+    let mut device_summaries = Vec::new();
+    
+    for metadata in &all_metadata {
+        // Get portfolio balances for this device
+        let balances = cache.get_device_portfolio(&metadata.device_id).await.unwrap_or_default();
+        
+        // Calculate total USD value for this device
+        let mut device_total = 0.0;
+        for balance in &balances {
+            if let Ok(value) = balance.value_usd.parse::<f64>() {
+                device_total += value;
+            }
+        }
+        
+        total_portfolio_value += device_total;
+        
+        let device_label = metadata.label.as_deref().unwrap_or("Unnamed KeepKey");
+        let device_short = &metadata.device_id[metadata.device_id.len().saturating_sub(8)..];
+        
+        device_summaries.push((device_label.to_string(), device_short.to_string(), device_total, balances.len()));
+    }
+    
+    // Log the startup summary
+    log::info!("📊 ==========================================");
+    log::info!("📊 VAULT STARTUP - PORTFOLIO SUMMARY");
+    log::info!("📊 ==========================================");
+    log::info!("💰 TOTAL PORTFOLIO VALUE: ${:.2} USD", total_portfolio_value);
+    log::info!("🔌 PAIRED DEVICES: {}", all_metadata.len());
+    log::info!("📊 ==========================================");
+    
+    for (label, device_short, value, balance_count) in device_summaries {
+        if value > 0.0 {
+            log::info!("   🏷️ {}: ${:.2} USD ({} assets) [{}]", label, value, balance_count, device_short);
+        } else {
+            log::info!("   🏷️ {}: $0.00 USD (no balances) [{}]", label, device_short);
+        }
+    }
+    
+    log::info!("📊 ==========================================");
+    log::info!("ℹ️  Portfolio values refresh when devices connect");
+    log::info!("📊 ==========================================");
     
     Ok(())
 } 

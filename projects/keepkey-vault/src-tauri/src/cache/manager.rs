@@ -262,6 +262,38 @@ impl CacheManager {
         ).optional().ok().flatten()
     }
     
+    /// Get all device metadata for portfolio summary
+    pub async fn get_all_device_metadata(&self) -> Result<Vec<CacheMetadata>> {
+        let db = self.db.lock().await;
+        
+        let mut stmt = db.prepare(
+            "SELECT device_id, label, firmware_version, initialized, 
+                    frontload_status, frontload_progress, last_frontload, error_message
+             FROM cache_metadata 
+             ORDER BY last_frontload DESC"
+        )?;
+        
+        let metadata_list = stmt.query_map([], |row| {
+            let status_str: String = row.get(4)?;
+            let status = FrontloadStatus::from_str(&status_str)
+                .unwrap_or(FrontloadStatus::Pending);
+            
+            Ok(CacheMetadata {
+                device_id: row.get(0)?,
+                label: row.get(1)?,
+                firmware_version: row.get(2)?,
+                initialized: row.get(3)?,
+                frontload_status: status,
+                frontload_progress: row.get(5)?,
+                last_frontload: row.get(6)?,
+                error_message: row.get(7)?,
+            })
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+        
+        Ok(metadata_list)
+    }
+    
     /// Update cache metadata
     pub async fn update_cache_metadata(&self, metadata: &CacheMetadata) -> Result<()> {
         let db = self.db.lock().await;
