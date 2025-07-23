@@ -578,35 +578,10 @@ impl FrontloadController {
         }
     }
 
-    /// Fetch staking positions for cosmos-based chains
-    async fn fetch_staking_positions(&self, client: &PioneerClient, xpubs: &[(String, String)]) -> Result<Option<std::collections::HashMap<String, Vec<crate::pioneer_api::StakingPosition>>>> {
-        // For demo purposes, try to fetch staking for Cosmos and Osmosis
-        let networks = ["cosmos:cosmoshub-4", "cosmos:osmosis-1"];
-        let mut all_positions = std::collections::HashMap::new();
-
-        for network_id in networks {
-            // In production, we'd derive cosmos addresses from xpubs
-            // For now, using placeholder addresses
-            let placeholder_address = "cosmos1placeholder";
-            
-            match client.get_staking_positions(network_id, placeholder_address).await {
-                Ok(positions) => {
-                    if !positions.is_empty() {
-                        all_positions.insert(network_id.to_string(), positions);
-                    }
-                }
-                Err(e) => {
-                    log::debug!("No staking positions for {}: {}", network_id, e);
-                }
-            }
-        }
-
-        if all_positions.is_empty() {
-            Ok(None)
-        } else {
-            Ok(Some(all_positions))
-        }
-    }
+    // REMOVED: fetch_staking_positions function with fake placeholder address
+    // This function violated the "NEVER MOCK ANYTHING" rule by using 
+    // a fake cosmos address "cosmos1placeholder". Real Cosmos address 
+    // derivation should be implemented from actual xpubs, not fake addresses.
 
     /// Convert staking position to portfolio balance format
     fn staking_position_to_balance(&self, position: &crate::pioneer_api::StakingPosition, network_id: &str) -> Option<crate::pioneer_api::PortfolioBalance> {

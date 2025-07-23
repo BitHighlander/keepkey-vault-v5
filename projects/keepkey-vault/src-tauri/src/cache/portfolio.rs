@@ -2,7 +2,7 @@
 use super::CacheManager;
 use crate::pioneer_api::{PortfolioBalance, Dashboard, NetworkSummary, AssetSummary};
 use anyhow::{Result, anyhow};
-use rusqlite::params;
+use rusqlite::{params, OptionalExtension};
 use serde_json;
 
 impl CacheManager {
