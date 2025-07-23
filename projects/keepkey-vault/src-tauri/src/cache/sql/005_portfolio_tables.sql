@@ -32,8 +32,8 @@ CREATE TABLE IF NOT EXISTS portfolio_balances (
     last_block_height INTEGER,
     is_verified BOOLEAN DEFAULT 0,
     
-    UNIQUE(device_id, pubkey, caip, address, type, validator),
-    FOREIGN KEY (device_id) REFERENCES devices(device_id) ON DELETE CASCADE
+    UNIQUE(device_id, pubkey, caip, address, type, validator)
+    -- Removed foreign key constraint that was referencing non-existent devices table
 );
 
 -- Asset metadata cache for token/coin information

@@ -201,7 +201,7 @@ pub async fn start_server(device_queue_manager: crate::commands::DeviceQueueMana
         .route("/cosmos/sign-amino", post(api::transactions::cosmos_sign_amino))
         
         // Portfolio endpoints
-        .route("/api/portfolio", get(api::portfolio::get_combined_portfolio))
+        .route("/api/portfolio", get(api::portfolio::get_all_devices_portfolio)) // 🎯 NEW: Aggregate all devices
         .route("/api/portfolio/:device_id", get(api::portfolio::get_device_portfolio))
         .route("/api/portfolio/instant/:device_id", get(api::portfolio::get_instant_portfolio))
         .route("/api/portfolio/history/:device_id", get(api::portfolio::get_portfolio_history))

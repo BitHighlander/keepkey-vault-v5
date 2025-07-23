@@ -264,6 +264,9 @@ impl CacheManager {
     
     /// Get all device metadata for portfolio summary
     pub async fn get_all_device_metadata(&self) -> Result<Vec<CacheMetadata>> {
+        // First check if we have orphaned pubkeys and auto-fix them
+        self.fix_orphaned_pubkeys().await?;
+        
         let db = self.db.lock().await;
         
         let mut stmt = db.prepare(
@@ -288,10 +291,71 @@ impl CacheManager {
                 last_frontload: row.get(6)?,
                 error_message: row.get(7)?,
             })
-        })?
-        .collect::<Result<Vec<_>, _>>()?;
+        })?.collect::<Result<Vec<_>, _>>()?;
         
         Ok(metadata_list)
+    }
+    
+    /// Auto-detect and fix orphaned pubkeys by creating device metadata
+    pub async fn fix_orphaned_pubkeys(&self) -> Result<()> {
+        let db = self.db.lock().await;
+        
+        // Find devices with pubkeys but no metadata
+        let orphaned_devices: Vec<String> = db.prepare(
+            "SELECT DISTINCT device_id FROM cached_pubkeys 
+             WHERE device_id NOT IN (SELECT device_id FROM cache_metadata)"
+        )?.query_map([], |row| Ok(row.get::<_, String>(0)?))?.collect::<Result<Vec<_>, _>>()?;
+        
+        if orphaned_devices.is_empty() {
+            return Ok(());
+        }
+        
+        log::info!("🔧 Found {} orphaned devices with pubkeys but no metadata", orphaned_devices.len());
+        
+        for device_id in orphaned_devices {
+            // Count pubkeys for this device
+            let pubkey_count: i64 = db.query_row(
+                "SELECT COUNT(*) FROM cached_pubkeys WHERE device_id = ?1",
+                params![&device_id],
+                |row| row.get(0),
+            )?;
+            
+            log::info!("📋 Creating metadata for device {} with {} cached pubkeys", device_id, pubkey_count);
+            
+            // Create metadata for orphaned device
+            let metadata = CacheMetadata {
+                device_id: device_id.clone(),
+                label: Some(format!("KeepKey ({})", &device_id.chars().rev().take(8).collect::<String>().chars().rev().collect::<String>())),
+                firmware_version: Some("Unknown".to_string()),
+                initialized: true,
+                frontload_status: FrontloadStatus::Completed,
+                frontload_progress: 100,
+                last_frontload: Some(chrono::Utc::now().timestamp()),
+                error_message: Some("Auto-recovered from orphaned pubkeys".to_string()),
+            };
+            
+            // Insert the metadata
+            db.execute(
+                "INSERT OR REPLACE INTO cache_metadata 
+                 (device_id, label, firmware_version, initialized, 
+                  frontload_status, frontload_progress, last_frontload, error_message)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                params![
+                    metadata.device_id,
+                    metadata.label,
+                    metadata.firmware_version,
+                    metadata.initialized,
+                    metadata.frontload_status.as_str(),
+                    metadata.frontload_progress,
+                    metadata.last_frontload,
+                    metadata.error_message,
+                ],
+            )?;
+            
+            log::info!("✅ Created metadata for orphaned device: {}", device_id);
+        }
+        
+        Ok(())
     }
     
     /// Update cache metadata

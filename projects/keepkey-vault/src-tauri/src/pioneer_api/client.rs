@@ -2,7 +2,7 @@
 use super::types::*;
 use anyhow::{Result, anyhow};
 use reqwest::{Client, StatusCode};
-use serde_json::json;
+use serde_json;
 use std::time::Duration;
 
 const PIONEER_API_URL: &str = "https://pioneers.dev/api/v1";
@@ -31,7 +31,7 @@ impl PioneerClient {
     }
     
     /// Get portfolio balances using the real Pioneer API
-    /// Based on swagger spec: POST /portfolio/balances
+    /// Based on working example: GET /api/v1/portfolio
     pub async fn get_portfolio_balances(&self, pubkeys: Vec<PubkeyInfo>) -> Result<Vec<PortfolioBalance>> {
         if pubkeys.is_empty() {
             return Ok(vec![]);
@@ -39,18 +39,55 @@ impl PioneerClient {
         
         log::info!("🔍 Fetching portfolio balances for {} pubkeys from Pioneer API", pubkeys.len());
         
-        let url = format!("{}/portfolio/balances", PIONEER_API_URL);
+        let url = format!("{}/portfolio", PIONEER_API_URL);
         
-        // Build request payload matching swagger spec
-        let payload = json!({
-            "pubkeys": pubkeys
-        });
+        // Convert PubkeyInfo to the format expected by Pioneer API
+        let assets: Vec<serde_json::Value> = pubkeys.iter().map(|pubkey_info| {
+            // Map blockchain names to proper CAIP identifiers (case-insensitive)
+            let caip = if let Some(blockchain) = pubkey_info.networks.get(0) {
+                // Handle both plain blockchain names and full CAIP strings
+                if blockchain.contains("/slip44:") {
+                    // Already in CAIP format, use as-is
+                    blockchain.as_str()
+                } else {
+                    // Map plain blockchain names to CAIP
+                    match blockchain.to_lowercase().as_str() {
+                        "bitcoin" => "bip122:000000000019d6689c085ae165831e93/slip44:0",
+                        "ethereum" => "eip155:1/slip44:60",
+                        "cosmos" => "cosmos:cosmoshub-4/slip44:118", 
+                        "thorchain" => "cosmos:thorchain-mainnet-v1/slip44:931",
+                        "mayachain" => "cosmos:mayachain-mainnet-v1/slip44:931",
+                        "osmosis" => "cosmos:osmosis-1/slip44:118",
+                        "ripple" => "ripple:1/slip44:144",
+                        "doge" | "dogecoin" => "bip122:1a91e3dace36e2be3bf030a65679fe821aa1d6ef92e7c9902eb318182c355691/slip44:3",
+                        "litecoin" => "bip122:12a765e31ffd4059bada1e25190f6e98c99d9714d334efa41a195a7e7e04bfe2/slip44:2",
+                        "bch" | "bitcoin-cash" | "bitcoincash" => "bip122:000000000019d6689c085ae165831e93/slip44:145",
+                        "dash" => "bip122:feb5034fc5ef3d0c5a9c358c0b9730c9d5d0b6c1d9878ca2b258a78c0a4cea51/slip44:5",
+                        _ => {
+                            log::warn!("🔧 Unknown blockchain '{}', using default CAIP", blockchain);
+                            "unknown:0/slip44:0"
+                        }
+                    }
+                }
+            } else {
+                log::warn!("🔧 No blockchain specified for pubkey, using default CAIP");
+                "unknown:0/slip44:0"
+            };
+            
+            serde_json::json!({
+                "caip": caip,
+                "pubkey": pubkey_info.pubkey
+            })
+        }).collect();
+        
+        // Send the array directly, not wrapped in an object
+        log::debug!("📡 Pioneer API request payload: {}", serde_json::to_string_pretty(&assets).unwrap_or_default());
         
         let response = self.client
             .post(&url)
             .header("Authorization", &self.api_key)
             .header("Content-Type", "application/json")
-            .json(&payload)
+            .json(&assets)  // Send array directly
             .send()
             .await?;
         

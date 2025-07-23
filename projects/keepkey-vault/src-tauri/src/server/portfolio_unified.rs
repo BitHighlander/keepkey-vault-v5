@@ -200,7 +200,7 @@ async fn get_device_portfolio_data(
     // Get unique chains
     let mut chains: Vec<String> = balances
         .iter()
-        .map(|b| b.network_id.clone())
+        .filter_map(|b| b.network_id.clone())
         .collect::<std::collections::HashSet<_>>()
         .into_iter()
         .collect();
@@ -212,8 +212,7 @@ async fn get_device_portfolio_data(
         .filter_map(|balance| {
             let usd_value = balance.value_usd.parse::<f64>().ok()?;
             let price = balance.price_usd
-                .as_ref()
-                .and_then(|p| p.parse::<f64>().ok())
+                .parse::<f64>()
                 .unwrap_or(0.0);
             
             // Skip zero balances
@@ -221,10 +220,13 @@ async fn get_device_portfolio_data(
                 return None;
             }
             
+            let ticker = balance.ticker.as_ref()?.clone();
+            let network_id = balance.network_id.as_ref()?.clone();
+            
             Some(AssetBalance {
-                symbol: balance.ticker.clone(),
-                name: balance.name.unwrap_or_else(|| balance.ticker.clone()),
-                chain: network_id_to_chain_name(&balance.network_id),
+                symbol: ticker.clone(),
+                name: balance.name.unwrap_or_else(|| ticker.clone()),
+                chain: network_id_to_chain_name(&network_id),
                 balance: balance.balance,
                 usd_value,
                 price,

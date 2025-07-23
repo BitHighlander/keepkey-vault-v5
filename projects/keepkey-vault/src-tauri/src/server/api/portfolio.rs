@@ -51,6 +51,30 @@ pub struct EnhancedPortfolioResponse {
     pub refreshing: bool,
 }
 
+/// Response for aggregated portfolio across ALL paired devices
+#[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct AllDevicesPortfolioResponse {
+    pub success: bool,
+    /// THE NUMBER THAT MATTERS - total USD value across ALL paired devices
+    pub total_value_usd: f64,
+    pub paired_devices: usize,
+    pub devices: Vec<DevicePortfolioSummary>,
+    pub last_updated: i64,
+    pub cached: bool,
+}
+
+/// Summary of portfolio for a single device
+#[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct DevicePortfolioSummary {
+    pub device_id: String,
+    pub label: String,
+    pub short_id: String, // Last 8 chars for easy identification
+    pub total_value_usd: f64,
+    pub balance_count: usize,
+}
+
 /// Get combined portfolio across all devices
 #[utoipa::path(
     get,
@@ -315,6 +339,84 @@ pub async fn get_portfolio_history(
     Ok(Json(history))
 }
 
+/// Get aggregated portfolio for ALL paired devices - THE NUMBER THAT MATTERS!
+/// No device ID needed - returns total USD value across all paired devices
+#[utoipa::path(
+    get,
+    path = "/api/portfolio",
+    responses(
+        (status = 200, description = "Portfolio data aggregated across all paired devices", body = AllDevicesPortfolioResponse),
+        (status = 500, description = "Internal server error"),
+    ),
+    tag = "portfolio"
+)]
+pub async fn get_all_devices_portfolio(
+    State(state): State<Arc<ServerState>>,
+    Query(params): Query<PortfolioQuery>,
+) -> Result<Json<AllDevicesPortfolioResponse>, StatusCode> {
+    let cache = state.cache_manager.get()
+        .ok_or(StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    // Get all device metadata to know which devices are paired
+    let all_metadata = cache.get_all_device_metadata().await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    if all_metadata.is_empty() {
+        return Ok(Json(AllDevicesPortfolioResponse {
+            success: true,
+            total_value_usd: 0.0,
+            paired_devices: 0,
+            devices: vec![],
+            last_updated: chrono::Utc::now().timestamp(),
+            cached: true,
+        }));
+    }
+
+    // Get portfolio data for each device and aggregate
+    let mut total_value_usd = 0.0;
+    let mut devices = Vec::new();
+    let mut latest_update = 0i64;
+
+    for metadata in &all_metadata {
+        match cache.get_device_portfolio(&metadata.device_id).await {
+            Ok(balances) => {
+                let device_total: f64 = balances.iter()
+                    .filter_map(|b| b.value_usd.parse::<f64>().ok())
+                    .sum();
+                
+                total_value_usd += device_total;
+                
+                devices.push(DevicePortfolioSummary {
+                    device_id: metadata.device_id.clone(),
+                    label: metadata.label.clone().unwrap_or_else(|| "Unknown Device".to_string()),
+                    short_id: metadata.device_id.chars().rev().take(8).collect::<String>().chars().rev().collect(),
+                    total_value_usd: device_total,
+                    balance_count: balances.len(),
+                });
+
+                // Track latest update time
+                if let Ok(Some((_, timestamp, _))) = cache.get_last_portfolio_value(&metadata.device_id).await {
+                    latest_update = latest_update.max(timestamp);
+                }
+            }
+            Err(e) => {
+                log::warn!("Failed to get portfolio for device {}: {}", metadata.device_id, e);
+            }
+        }
+    }
+
+    log::info!("💰 TOTAL PORTFOLIO VALUE: ${:.2} USD across {} paired devices", total_value_usd, devices.len());
+
+    Ok(Json(AllDevicesPortfolioResponse {
+        success: true,
+        total_value_usd,
+        paired_devices: devices.len(),
+        devices,
+        last_updated: if latest_update > 0 { latest_update } else { chrono::Utc::now().timestamp() },
+        cached: true,
+    }))
+}
+
 fn trigger_background_refresh(
     state: Arc<ServerState>,
     cache: Arc<crate::cache::CacheManager>,
@@ -335,22 +437,39 @@ async fn refresh_device_portfolio(
 ) -> Result<(), anyhow::Error> {
     log::info!("🔄 Refreshing portfolio for device: {}", device_id);
     
-    // Get device xpubs from cache database
-    let xpubs = {
+    // Get device pubkey data from cached_pubkeys table (NOT wallet_xpubs!)
+    let pubkey_data = {
         let db = cache.db.lock().await;
         
-        // Query xpubs for device
-        let mut stmt = db.prepare("SELECT pubkey, caip FROM wallet_xpubs WHERE device_id = ?1")?;
+        // Query both xpubs and addresses from cached_pubkeys
+        let mut stmt = db.prepare("
+            SELECT DISTINCT 
+                coin_name,
+                xpub,
+                address,
+                script_type
+            FROM cached_pubkeys 
+            WHERE device_id = ?1 
+            AND (xpub IS NOT NULL OR address IS NOT NULL)
+        ")?;
+        
         let rows = stmt.query_map(params![device_id], |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            Ok((
+                row.get::<_, String>(0)?,  // coin_name
+                row.get::<_, Option<String>>(1)?,  // xpub
+                row.get::<_, Option<String>>(2)?,  // address
+                row.get::<_, Option<String>>(3)?,  // script_type
+            ))
         })?;
-        rows.collect::<Result<Vec<(String, String)>, _>>()?
+        rows.collect::<Result<Vec<(String, Option<String>, Option<String>, Option<String>)>, _>>()?
     }; // Drop db lock here
     
-    if xpubs.is_empty() {
-        log::warn!("No xpubs found for device {}", device_id);
+    if pubkey_data.is_empty() {
+        log::warn!("No cached pubkeys found for device {}", device_id);
         return Ok(());
     }
+    
+    log::info!("📊 Found {} cached pubkey entries for portfolio refresh", pubkey_data.len());
     
     // Get API key from environment
     let api_key = std::env::var("PIONEER_API_KEY").ok();
@@ -358,19 +477,128 @@ async fn refresh_device_portfolio(
     // Create Pioneer client
     let pioneer_client = crate::pioneer_api::create_client(api_key)?;
     
-    // Build pubkey info for Pioneer API
+    // Build pubkey info for Pioneer API - use addresses for Cosmos chains, xpubs for others
     let mut pubkey_infos = Vec::new();
-    for (pubkey, caip) in &xpubs {
+    for (coin_name, xpub, address, _script_type) in &pubkey_data {
+        let (pubkey, caip) = match coin_name.to_lowercase().as_str() {
+            // Cosmos chains need addresses, not xpubs
+            "cosmos" => {
+                if let Some(addr) = address {
+                    (addr.clone(), "cosmos:cosmoshub-4/slip44:118".to_string())
+                } else {
+                    log::warn!("⚠️ No address found for cosmos pubkey, skipping");
+                    continue;
+                }
+            },
+            "osmosis" => {
+                if let Some(addr) = address {
+                    (addr.clone(), "cosmos:osmosis-1/slip44:118".to_string())
+                } else {
+                    log::warn!("⚠️ No address found for osmosis pubkey, skipping");
+                    continue;
+                }
+            },
+            "thorchain" => {
+                if let Some(addr) = address {
+                    (addr.clone(), "cosmos:thorchain-mainnet-v1/slip44:931".to_string())
+                } else {
+                    log::warn!("⚠️ No address found for thorchain pubkey, skipping");
+                    continue;
+                }
+            },
+            "mayachain" => {
+                if let Some(addr) = address {
+                    (addr.clone(), "cosmos:mayachain-mainnet-v1/slip44:931".to_string())
+                } else {
+                    log::warn!("⚠️ No address found for mayachain pubkey, skipping");
+                    continue;
+                }
+            },
+            // Bitcoin-like chains use xpubs
+            "bitcoin" => {
+                if let Some(xpub_val) = xpub {
+                    (xpub_val.clone(), "bip122:000000000019d6689c085ae165831e93/slip44:0".to_string())
+                } else {
+                    log::warn!("⚠️ No xpub found for bitcoin pubkey, skipping");
+                    continue;
+                }
+            },
+            "ethereum" => {
+                if let Some(xpub_val) = xpub {
+                    (xpub_val.clone(), "eip155:1/slip44:60".to_string())
+                } else {
+                    log::warn!("⚠️ No xpub found for ethereum pubkey, skipping");
+                    continue;
+                }
+            },
+            "litecoin" => {
+                if let Some(xpub_val) = xpub {
+                    (xpub_val.clone(), "bip122:12a765e31ffd4059bada1e25190f6e98/slip44:2".to_string())
+                } else {
+                    log::warn!("⚠️ No xpub found for litecoin pubkey, skipping");
+                    continue;
+                }
+            },
+            "dogecoin" => {
+                if let Some(xpub_val) = xpub {
+                    (xpub_val.clone(), "bip122:1a91e3dace36e2be3bf030a65679fe82/slip44:3".to_string())
+                } else {
+                    log::warn!("⚠️ No xpub found for dogecoin pubkey, skipping");
+                    continue;
+                }
+            },
+            "bitcoincash" => {
+                if let Some(xpub_val) = xpub {
+                    (xpub_val.clone(), "bip122:000000000000000000651ef99cb9fcbe/slip44:145".to_string())
+                } else {
+                    log::warn!("⚠️ No xpub found for bitcoincash pubkey, skipping");
+                    continue;
+                }
+            },
+            "dash" => {
+                if let Some(xpub_val) = xpub {
+                    (xpub_val.clone(), "bip122:00000ffd590b1485b3caadc19b22e637/slip44:5".to_string())
+                } else {
+                    log::warn!("⚠️ No xpub found for dash pubkey, skipping");
+                    continue;
+                }
+            },
+            "ripple" => {
+                if let Some(addr) = address {
+                    (addr.clone(), "ripple:1/slip44:144".to_string())
+                } else {
+                    log::warn!("⚠️ No address found for ripple pubkey, skipping");
+                    continue;
+                }
+            },
+            _ => {
+                log::warn!("⚠️ Unknown coin type: {}, skipping", coin_name);
+                continue;
+            }
+        };
+        
+        log::info!("📊 Adding to Pioneer API request: {} -> {} ({})", coin_name, caip, 
+            if coin_name.starts_with("cosmos") || coin_name.ends_with("chain") { "address" } else { "xpub" });
+        
         pubkey_infos.push(crate::pioneer_api::PubkeyInfo {
-            pubkey: pubkey.clone(),
-            networks: vec![caip.clone()], // Use CAIP as network identifier
+            pubkey,
+            networks: vec![caip],
             path: None,
             address: None,
         });
     }
     
+    if pubkey_infos.is_empty() {
+        log::warn!("No valid pubkey data found for Pioneer API request");
+        return Ok(());
+    }
+    
+    log::info!("🚀 Sending {} pubkey entries to Pioneer API for portfolio fetch", pubkey_infos.len());
+    
     // Fetch balances using simplified Pioneer API
     let balances = pioneer_client.get_portfolio_balances(pubkey_infos).await?;
+    
+    log::info!("✅ Received {} balances from Pioneer API", balances.len());
     
     // Save to cache
     for balance in &balances {
@@ -384,7 +612,8 @@ async fn refresh_device_portfolio(
     // Save history snapshot
     cache.save_portfolio_snapshot(device_id, dashboard.total_value_usd).await?;
     
-    log::info!("✅ Portfolio refresh complete for device {}: {} balances", device_id, balances.len());
+    log::info!("✅ Portfolio refresh complete for device {}: {} balances, ${:.2} total value", 
+        device_id, balances.len(), dashboard.total_value_usd);
     
     Ok(())
 }
@@ -394,30 +623,33 @@ pub fn build_dashboard_from_balances(balances: &[PortfolioBalance]) -> Dashboard
     use std::collections::HashMap;
     use crate::pioneer_api::{NetworkSummary, AssetSummary};
     
-    let mut total_value_usd = 0.0;
+    let mut total_value = 0.0;
     let mut network_totals: HashMap<String, f64> = HashMap::new();
     let mut asset_totals: HashMap<String, (f64, String)> = HashMap::new();
     
+    // Calculate total value and aggregate by network and asset
     for balance in balances {
-        let value = balance.value_usd.parse::<f64>().unwrap_or(0.0);
-        total_value_usd += value;
-        
-        *network_totals.entry(balance.network_id.clone()).or_insert(0.0) += value;
-        
-        let asset_entry = asset_totals.entry(balance.ticker.clone())
-            .or_insert((0.0, "0".to_string()));
-        asset_entry.0 += value;
-        
-        if let Ok(bal) = balance.balance.parse::<f64>() {
-            let current = asset_entry.1.parse::<f64>().unwrap_or(0.0);
-            asset_entry.1 = (current + bal).to_string();
+        if let Ok(value) = balance.value_usd.parse::<f64>() {
+            total_value += value;
+            
+            // Aggregate by network if network_id exists
+            if let Some(network_id) = &balance.network_id {
+                *network_totals.entry(network_id.clone()).or_insert(0.0) += value;
+            }
+            
+            // Aggregate by asset if ticker exists
+            if let Some(ticker) = &balance.ticker {
+                let asset_entry = asset_totals.entry(ticker.clone())
+                    .or_insert((0.0, balance.name.clone().unwrap_or_else(|| ticker.clone())));
+                asset_entry.0 += value;
+            }
         }
     }
     
     let mut networks = Vec::new();
     for (network_id, value_usd) in network_totals {
-        let percentage = if total_value_usd > 0.0 {
-            (value_usd / total_value_usd) * 100.0
+        let percentage = if total_value > 0.0 {
+            (value_usd / total_value) * 100.0
         } else {
             0.0
         };
@@ -431,8 +663,8 @@ pub fn build_dashboard_from_balances(balances: &[PortfolioBalance]) -> Dashboard
     
     let mut assets = Vec::new();
     for (ticker, (value_usd, balance)) in asset_totals {
-        let percentage = if total_value_usd > 0.0 {
-            (value_usd / total_value_usd) * 100.0
+        let percentage = if total_value > 0.0 {
+            (value_usd / total_value) * 100.0
         } else {
             0.0
         };
@@ -449,7 +681,7 @@ pub fn build_dashboard_from_balances(balances: &[PortfolioBalance]) -> Dashboard
     assets.sort_by(|a, b| b.value_usd.partial_cmp(&a.value_usd).unwrap());
     
     Dashboard {
-        total_value_usd,
+        total_value_usd: total_value,
         networks,
         assets,
     }

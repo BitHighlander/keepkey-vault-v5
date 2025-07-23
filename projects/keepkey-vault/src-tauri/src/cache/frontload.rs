@@ -495,7 +495,8 @@ impl FrontloadController {
                 // Cache the real portfolio data
                 for balance in &balances {
                     if let Err(e) = self.cache.save_portfolio_balance(balance, device_id).await {
-                        log::warn!("⚠️ Failed to cache balance for {}: {}", balance.ticker, e);
+                        let ticker = balance.ticker.as_deref().unwrap_or("Unknown");
+                        log::warn!("⚠️ Failed to cache balance for {}: {}", ticker, e);
                     }
                 }
                 
@@ -514,17 +515,134 @@ impl FrontloadController {
     async fn collect_device_xpubs(&self, device_id: &str) -> Result<Vec<(String, String)>> {
         let db = self.cache.db.lock().await;
         
-        let mut stmt = db.prepare(
-            "SELECT DISTINCT xpub, coin_name FROM cached_pubkeys 
-             WHERE device_id = ?1 AND xpub IS NOT NULL AND xpub != ''"
-        )?;
+        // Query both xpubs and addresses from cached_pubkeys, similar to portfolio refresh
+        let mut stmt = db.prepare("
+            SELECT DISTINCT 
+                coin_name,
+                xpub,
+                address
+            FROM cached_pubkeys 
+            WHERE device_id = ?1 
+            AND (xpub IS NOT NULL OR address IS NOT NULL)
+        ")?;
         
-        let xpubs = stmt.query_map([device_id], |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-        })?
-        .collect::<Result<Vec<_>, _>>()?;
+        let rows = stmt.query_map([device_id], |row| {
+            Ok((
+                row.get::<_, String>(0)?,  // coin_name
+                row.get::<_, Option<String>>(1)?,  // xpub
+                row.get::<_, Option<String>>(2)?,  // address
+            ))
+        })?;
         
-        Ok(xpubs)
+        let pubkey_data = rows.collect::<Result<Vec<_>, _>>()?;
+        
+        // Convert to (pubkey, caip) tuples - use addresses for Cosmos chains, xpubs for others
+        let mut result = Vec::new();
+        for (coin_name, xpub, address) in pubkey_data {
+            let (pubkey, caip) = match coin_name.to_lowercase().as_str() {
+                // Cosmos chains need addresses, not xpubs
+                "cosmos" => {
+                    if let Some(addr) = address {
+                        (addr, "cosmos:cosmoshub-4/slip44:118".to_string())
+                    } else {
+                        log::warn!("⚠️ No address found for cosmos pubkey, skipping");
+                        continue;
+                    }
+                },
+                "osmosis" => {
+                    if let Some(addr) = address {
+                        (addr, "cosmos:osmosis-1/slip44:118".to_string())
+                    } else {
+                        log::warn!("⚠️ No address found for osmosis pubkey, skipping");
+                        continue;
+                    }
+                },
+                "thorchain" => {
+                    if let Some(addr) = address {
+                        (addr, "cosmos:thorchain-mainnet-v1/slip44:931".to_string())
+                    } else {
+                        log::warn!("⚠️ No address found for thorchain pubkey, skipping");
+                        continue;
+                    }
+                },
+                "mayachain" => {
+                    if let Some(addr) = address {
+                        (addr, "cosmos:mayachain-mainnet-v1/slip44:931".to_string())
+                    } else {
+                        log::warn!("⚠️ No address found for mayachain pubkey, skipping");
+                        continue;
+                    }
+                },
+                // Bitcoin-like chains use xpubs
+                "bitcoin" => {
+                    if let Some(xpub_val) = xpub {
+                        (xpub_val, "bip122:000000000019d6689c085ae165831e93/slip44:0".to_string())
+                    } else {
+                        log::warn!("⚠️ No xpub found for bitcoin pubkey, skipping");
+                        continue;
+                    }
+                },
+                "ethereum" => {
+                    if let Some(xpub_val) = xpub {
+                        (xpub_val, "eip155:1/slip44:60".to_string())
+                    } else {
+                        log::warn!("⚠️ No xpub found for ethereum pubkey, skipping");
+                        continue;
+                    }
+                },
+                "litecoin" => {
+                    if let Some(xpub_val) = xpub {
+                        (xpub_val, "bip122:12a765e31ffd4059bada1e25190f6e98/slip44:2".to_string())
+                    } else {
+                        log::warn!("⚠️ No xpub found for litecoin pubkey, skipping");
+                        continue;
+                    }
+                },
+                "dogecoin" => {
+                    if let Some(xpub_val) = xpub {
+                        (xpub_val, "bip122:1a91e3dace36e2be3bf030a65679fe82/slip44:3".to_string())
+                    } else {
+                        log::warn!("⚠️ No xpub found for dogecoin pubkey, skipping");
+                        continue;
+                    }
+                },
+                "bitcoincash" => {
+                    if let Some(xpub_val) = xpub {
+                        (xpub_val, "bip122:000000000000000000651ef99cb9fcbe/slip44:145".to_string())
+                    } else {
+                        log::warn!("⚠️ No xpub found for bitcoincash pubkey, skipping");
+                        continue;
+                    }
+                },
+                "dash" => {
+                    if let Some(xpub_val) = xpub {
+                        (xpub_val, "bip122:00000ffd590b1485b3caadc19b22e637/slip44:5".to_string())
+                    } else {
+                        log::warn!("⚠️ No xpub found for dash pubkey, skipping");
+                        continue;
+                    }
+                },
+                "ripple" => {
+                    if let Some(addr) = address {
+                        (addr, "ripple:1/slip44:144".to_string())
+                    } else {
+                        log::warn!("⚠️ No address found for ripple pubkey, skipping");
+                        continue;
+                    }
+                },
+                _ => {
+                    log::warn!("⚠️ Unknown coin type: {}, skipping", coin_name);
+                    continue;
+                }
+            };
+            
+            log::info!("📊 Frontload adding: {} -> {} ({})", coin_name, caip,
+                if coin_name.starts_with("cosmos") || coin_name.ends_with("chain") { "address" } else { "xpub" });
+            
+            result.push((pubkey, caip));
+        }
+        
+        Ok(result)
     }
 
     /// Get total USD value of portfolio for a device

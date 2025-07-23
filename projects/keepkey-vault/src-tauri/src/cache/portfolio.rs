@@ -11,39 +11,38 @@ impl CacheManager {
         self.save_portfolio_balance_with_pubkey(balance, device_id, None).await
     }
 
-    /// Save portfolio balance to cache with specific pubkey
+    /// Save portfolio balance with optional pubkey
     pub async fn save_portfolio_balance_with_pubkey(&self, balance: &PortfolioBalance, device_id: &str, pubkey: Option<&str>) -> Result<()> {
         let db = self.db.lock().await;
         
-        let now = chrono::Utc::now().timestamp();
+        // Use provided pubkey or the one from balance
+        let final_pubkey = pubkey.unwrap_or(&balance.pubkey);
         
-        // If pubkey not provided, try to infer from address/derivation path
-        let resolved_pubkey = match pubkey {
-            Some(pk) => pk.to_string(),
-            None => {
-                // Try to find a matching xpub based on the balance's address or network
-                self.find_matching_pubkey(device_id, &balance.network_id, balance.address.as_deref()).await
-                    .unwrap_or_else(|| "unknown".to_string())
-            }
+        // Enhanced balance type detection based on field presence
+        let balance_type = if balance.validator.is_some() {
+            "delegation"
+        } else if balance.unbonding_end.is_some() {
+            "unbonding"
+        } else {
+            "balance"
         };
         
         db.execute(
             "INSERT OR REPLACE INTO portfolio_balances 
-             (device_id, pubkey, caip, network_id, ticker, address, balance, balance_usd, price_usd,
-              type, name, icon, precision, contract, validator, unbonding_end, rewards_available,
-              last_updated, is_verified)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)",
+             (device_id, caip, ticker, balance, balance_usd, price_usd, network_id, 
+              address, type, name, icon, precision, contract, validator, 
+              unbonding_end, rewards_available, pubkey, last_updated)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)",
             params![
                 device_id,
-                resolved_pubkey,
                 balance.caip,
-                balance.network_id,
-                balance.ticker,
-                balance.address,
+                balance.ticker.as_ref().unwrap_or(&"UNKNOWN".to_string()),
                 balance.balance,
-                balance.value_usd.as_str(),
-                balance.price_usd.as_ref().unwrap_or(&"0".to_string()),
-                balance.balance_type.as_ref().unwrap_or(&"balance".to_string()),
+                balance.value_usd,  // This is balance_usd in the database
+                balance.price_usd,
+                balance.network_id.as_ref().unwrap_or(&"unknown".to_string()),
+                balance.address,
+                balance_type,
                 balance.name,
                 balance.icon,
                 balance.precision,
@@ -51,8 +50,8 @@ impl CacheManager {
                 balance.validator,
                 balance.unbonding_end,
                 balance.rewards_available,
-                now,
-                true
+                final_pubkey,
+                chrono::Utc::now().timestamp(),
             ],
         )?;
         
@@ -106,26 +105,28 @@ impl CacheManager {
         }
     }
     
-    /// Get portfolio balances for a device
+    /// Get all portfolio balances for a device
     pub async fn get_device_portfolio(&self, device_id: &str) -> Result<Vec<PortfolioBalance>> {
         let db = self.db.lock().await;
         
         let mut stmt = db.prepare(
-            "SELECT caip, ticker, balance, balance_usd, price_usd, network_id, address,
-                    type, name, icon, precision, contract, validator, unbonding_end, rewards_available
+            "SELECT caip, ticker, balance, balance_usd, price_usd, network_id, address, 
+                    type, name, icon, precision, contract, validator, unbonding_end, 
+                    rewards_available, pubkey
              FROM portfolio_balances 
-             WHERE device_id = ?1
+             WHERE device_id = ?1 
              ORDER BY CAST(balance_usd AS REAL) DESC"
         )?;
         
-        let balances = stmt.query_map(params![device_id], |row| {
+        let balances = stmt.query_map([device_id], |row| {
             Ok(PortfolioBalance {
                 caip: row.get(0)?,
-                ticker: row.get(1)?,
+                pubkey: row.get(15).unwrap_or_else(|_| "unknown".to_string()), // Get pubkey from database
+                ticker: Some(row.get(1)?),
                 balance: row.get(2)?,
-                value_usd: row.get(3)?,
+                value_usd: row.get(3)?,  // Maps to balance_usd column
                 price_usd: row.get(4)?,
-                network_id: row.get(5)?,
+                network_id: Some(row.get(5)?),
                 address: row.get(6)?,
                 balance_type: row.get(7)?,
                 name: row.get(8)?,
@@ -147,33 +148,32 @@ impl CacheManager {
         let db = self.db.lock().await;
         
         let mut stmt = db.prepare(
-            "SELECT caip, network_id, ticker,
-                    SUM(CAST(balance AS REAL)) as total_balance,
+            "SELECT caip, ticker, SUM(CAST(balance AS REAL)) as total_balance, 
                     SUM(CAST(balance_usd AS REAL)) as total_value_usd,
-                    MAX(price_usd) as price_usd,
-                    MAX(name) as name,
-                    MAX(icon) as icon,
-                    MAX(precision) as precision
+                    MAX(price_usd) as price_usd, network_id, 
+                    MAX(name) as name, MAX(icon) as icon, MAX(precision) as precision,
+                    MAX(contract) as contract, '' as pubkey
              FROM portfolio_balances 
              WHERE type = 'balance'
-             GROUP BY caip, network_id, ticker
+             GROUP BY caip, ticker, network_id
              ORDER BY total_value_usd DESC"
         )?;
         
         let balances = stmt.query_map([], |row| {
             Ok(PortfolioBalance {
                 caip: row.get(0)?,
-                network_id: row.get(1)?,
-                ticker: row.get(2)?,
-                balance: row.get::<_, f64>(3)?.to_string(),
-                value_usd: row.get::<_, f64>(4)?.to_string(),
-                price_usd: Some(row.get(5)?),
+                pubkey: "unknown".to_string(), // Default pubkey for combined portfolio
+                network_id: Some(row.get(4)?),
+                ticker: Some(row.get(1)?),
+                balance: row.get::<_, f64>(2)?.to_string(),
+                value_usd: row.get::<_, f64>(3)?.to_string(),
+                price_usd: row.get(4)?,
                 address: None,
                 balance_type: Some("balance".to_string()),
-                name: row.get(6)?,
-                icon: row.get(7)?,
-                precision: row.get(8)?,
-                contract: None,
+                name: row.get(5)?,
+                icon: row.get(6)?,
+                precision: row.get(7)?,
+                contract: row.get(8)?,
                 validator: None,
                 unbonding_end: None,
                 rewards_available: None,
@@ -367,13 +367,12 @@ impl CacheManager {
     fn calculate_portfolio_change(&self, db: &rusqlite::Connection, device_id: &str, seconds_ago: i64) -> Result<Option<f64>> {
         let cutoff = chrono::Utc::now().timestamp() - seconds_ago;
         
-        // Get current value
-        let current: f64 = db.query_row(
-            "SELECT COALESCE(SUM(CAST(balance_usd AS REAL)), 0) 
+        let current_value: f64 = db.query_row(
+            "SELECT SUM(CAST(balance_usd AS REAL)) 
              FROM portfolio_balances WHERE device_id = ?1",
             params![device_id],
-            |row| row.get(0)
-        )?;
+            |row| row.get(0),
+        ).unwrap_or(0.0);
         
         // Get historical value
         let historical: Option<f64> = db.query_row(
@@ -386,7 +385,7 @@ impl CacheManager {
         
         if let Some(hist) = historical {
             if hist > 0.0 {
-                Ok(Some(((current - hist) / hist) * 100.0))
+                Ok(Some(((current_value - hist) / hist) * 100.0))
             } else {
                 Ok(None)
             }

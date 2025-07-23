@@ -3,16 +3,19 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use utoipa::ToSchema;
 
-/// Portfolio balance entry matching pioneer-sdk structure
+/// Portfolio balance entry matching actual Pioneer API response
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct PortfolioBalance {
-    pub caip: String,                    // e.g., "eip155:1/slip44:60"
-    pub ticker: String,                  // e.g., "ETH"
-    pub balance: String,                 // Balance as string for precision
-    pub value_usd: String,               // USD value
-    pub price_usd: Option<String>,       // Price per unit
-    pub network_id: String,              // e.g., "eip155:1"
+    pub caip: String,                    // e.g., "cosmos:mayachain-mainnet-v1/slip44:931"
+    pub pubkey: String,                  // e.g., "maya1g9el7lzjwh9yun2c4jjzhy09j98vkhfxfqkl5k"
+    pub balance: String,                 // e.g., "25.37483061"
+    pub price_usd: String,               // e.g., "0.20" (renamed from priceUsd)
+    pub value_usd: String,               // e.g., "5.06" (renamed from valueUsd)
+    
+    // Optional fields for compatibility
+    pub ticker: Option<String>,          // Asset ticker
+    pub network_id: Option<String>,      // Network identifier
     pub address: Option<String>,         // Specific address if applicable
     
     #[serde(rename = "type")]
