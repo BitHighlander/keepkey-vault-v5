@@ -388,7 +388,7 @@ async fn refresh_device_portfolio(
 }
 
 /// Build dashboard from balances
-fn build_dashboard_from_balances(balances: &[PortfolioBalance]) -> Dashboard {
+pub fn build_dashboard_from_balances(balances: &[PortfolioBalance]) -> Dashboard {
     use std::collections::HashMap;
     use crate::pioneer_api::{NetworkSummary, AssetSummary};
     

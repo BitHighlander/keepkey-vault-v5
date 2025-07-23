@@ -124,10 +124,10 @@ pub struct PubkeyInfo {
 
 /// Fee rate response
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct FeeRateResponse {
-    pub fastest: u32,
-    pub fast: u32,
-    pub average: u32,
+pub struct FeeRates {
+    pub slow: u64,
+    pub fast: u64,
+    pub average: u64,
 }
 
 /// Chart data for portfolio history
