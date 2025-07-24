@@ -14,21 +14,21 @@ interface DeviceUpdateManagerProps {
   onComplete?: () => void
 }
 
-export const DeviceUpdateManager = ({ onComplete }: DeviceUpdateManagerProps) => {
+export const DeviceUpdateManager: React.FC<DeviceUpdateManagerProps> = ({ onComplete }) => {
   const [deviceStatus, setDeviceStatus] = useState<DeviceStatus | null>(null)
-  const [showEnterBootloaderMode, setShowEnterBootloaderMode] = useState(false)
+  const [connectedDeviceId, setConnectedDeviceId] = useState<string | null>(null)
   const [showBootloaderUpdate, setShowBootloaderUpdate] = useState(false)
   const [showFirmwareUpdate, setShowFirmwareUpdate] = useState(false)
   const [showWalletCreation, setShowWalletCreation] = useState(false)
+  const [showEnterBootloaderMode, setShowEnterBootloaderMode] = useState(false)
   const [showPinUnlock, setShowPinUnlock] = useState(false)
   const [isProcessing, setIsProcessing] = useState(false)
-  const [connectedDeviceId, setConnectedDeviceId] = useState<string | null>(null)
   const [retryCount, setRetryCount] = useState(0)
   const [hasCompletedOnce, setHasCompletedOnce] = useState(false)
   
-  // Track temporary disconnections
-  const [temporarilyDisconnected, setTemporarilyDisconnected] = useState(false)
-  const [disconnectionTimeout, setDisconnectionTimeout] = useState<NodeJS.Timeout | null>(null)
+  // Track processed events to prevent loops
+  const [processedEvents, setProcessedEvents] = useState<Set<string>>(new Set())
+  const [lastProcessedStatus, setLastProcessedStatus] = useState<string | null>(null)
   
   // Get device invalid state dialog hook
   const deviceInvalidStateDialog = useDeviceInvalidStateDialog()
@@ -65,97 +65,90 @@ export const DeviceUpdateManager = ({ onComplete }: DeviceUpdateManagerProps) =>
     }
   }
 
-  // Function to handle device status and determine which dialog to show
   const handleDeviceStatus = (status: DeviceStatus) => {
     console.log('🔧 DeviceUpdateManager: Handling device status:', status)
-    console.log('🔧 DeviceUpdateManager: Status needs_initialization:', status.needsInitialization)
-    console.log('🔧 DeviceUpdateManager: Status needs_firmware_update:', status.needsFirmwareUpdate)
-    console.log('🔧 DeviceUpdateManager: Status needs_bootloader_update:', status.needsBootloaderUpdate)
-    console.log('🔧 DeviceUpdateManager: Status needs_pin_unlock:', status.needsPinUnlock)
     
-    // CRITICAL: Always hide invalid state dialog when handling new status
-    // This ensures we don't have overlapping dialogs
-    if (deviceInvalidStateDialog.isShowing(status.deviceId)) {
-      console.log('🔧 Hiding invalid state dialog before handling new status')
-      deviceInvalidStateDialog.hide(status.deviceId)
+    // Create a unique key for this status to prevent duplicate processing (without timestamp)
+    const statusKey = `${status.deviceId}-${status.needsInitialization}-${status.needsFirmwareUpdate}-${status.needsBootloaderUpdate}-${status.needsPinUnlock}`
+    
+    // Check if we've already processed this exact status recently
+    if (lastProcessedStatus === statusKey) {
+      console.log('🔧 DeviceUpdateManager: Skipping duplicate status processing')
+      return
     }
     
-    // Check if device is in bootloader mode - handle both field formats from backend
-    const isInBootloaderMode = status.features?.bootloader_mode || status.features?.bootloaderMode || false
-    console.log('🔧 Bootloader mode check:', {
-      bootloader_mode: status.features?.bootloader_mode,
-      bootloaderMode: status.features?.bootloaderMode,
-      isInBootloaderMode,
-      needsBootloaderUpdate: status.needsBootloaderUpdate,
-      hasBootloaderCheck: !!status.bootloaderCheck
-    })
+    setLastProcessedStatus(statusKey)
     
-    // Determine which dialog to show based on priority
-    if (status.needsBootloaderUpdate && status.bootloaderCheck) {
-      if (isInBootloaderMode) {
-        // Device needs bootloader update AND is in bootloader mode -> show update dialog
-        console.log('Device needs bootloader update and is in bootloader mode')
-        setShowEnterBootloaderMode(false)
-        setShowBootloaderUpdate(true)
-        setShowFirmwareUpdate(false)
-        setShowWalletCreation(false)
-      } else {
-        // Device needs bootloader update but NOT in bootloader mode -> show enter bootloader mode dialog
-        console.log('Device needs bootloader update but not in bootloader mode')
-        setShowEnterBootloaderMode(true)
-        setShowBootloaderUpdate(false)
-        setShowFirmwareUpdate(false)
-        setShowWalletCreation(false)
-      }
-    } else if (status.needsFirmwareUpdate && status.firmwareCheck) {
-      console.log('Device needs firmware update')
-      setShowEnterBootloaderMode(false)
-      setShowBootloaderUpdate(false)
+    console.log('🔧 DeviceUpdateManager: Status needsInitialization:', status.needsInitialization)
+    console.log('🔧 DeviceUpdateManager: Status needsFirmwareUpdate:', status.needsFirmwareUpdate)
+    console.log('🔧 DeviceUpdateManager: Status needsBootloaderUpdate:', status.needsBootloaderUpdate)
+    console.log('🔧 DeviceUpdateManager: Status needsPinUnlock:', status.needsPinUnlock)
+
+    // Check bootloader mode specifically
+    const bootloaderModeCheck = {
+      bootloader_mode: status.features?.bootloader_mode,
+      needsBootloaderUpdate: status.needsBootloaderUpdate
+    }
+    console.log('🔧 Bootloader mode check:', bootloaderModeCheck)
+
+    // Clear all dialogs first
+    setShowBootloaderUpdate(false)
+    setShowFirmwareUpdate(false) 
+    setShowWalletCreation(false)
+    setShowEnterBootloaderMode(false)
+    setShowPinUnlock(false)
+
+    // Handle bootloader update first (highest priority)
+    if (status.needsBootloaderUpdate) {
+      console.log('🔧 DeviceUpdateManager: Device needs bootloader update')
+      setShowBootloaderUpdate(true)
+      return
+    }
+    
+    // Handle firmware update
+    if (status.needsFirmwareUpdate) {
+      console.log('🔧 DeviceUpdateManager: Device needs firmware update')
       setShowFirmwareUpdate(true)
-      setShowWalletCreation(false)
-    } else if (status.needsInitialization) {
-      // Check if recovery is in progress - if so, don't interfere
-      if ((window as any).KEEPKEY_RECOVERY_IN_PROGRESS) {
-        console.log('🛡️ DeviceUpdateManager: Recovery in progress - IGNORING initialization request')
-        console.log('🛡️ DeviceUpdateManager: Keeping current state to protect recovery')
-        return; // Don't change any state during recovery
-      }
-      
-      console.log('🔧 DeviceUpdateManager: Device needs initialization - SHOULD SHOW ONBOARDING WIZARD')
-      console.log('🔧 DeviceUpdateManager: Setting showWalletCreation = true')
-      setShowEnterBootloaderMode(false)
-      setShowBootloaderUpdate(false)
-      setShowFirmwareUpdate(false)
+      return
+    }
+    
+    // Handle PIN unlock
+    if (status.needsPinUnlock) {
+      console.log('🔧 DeviceUpdateManager: Device needs PIN unlock')
+      setShowPinUnlock(true)
+      return
+    }
+    
+    // Handle wallet creation/initialization
+    if (status.needsInitialization) {
+      console.log('🔧 DeviceUpdateManager: Device needs initialization')
       setShowWalletCreation(true)
-    } else if (status.needsPinUnlock) {
-      // Device is initialized but locked with PIN - this is handled by the PIN unlock event listener
-      console.log('🔒 DeviceUpdateManager: Device needs PIN unlock - NOT calling onComplete()')
-      // Don't call onComplete() here - PIN unlock dialog will be shown via the pin-unlock-needed event
-      // Just ensure other dialogs are hidden
-      setShowEnterBootloaderMode(false)
-      setShowBootloaderUpdate(false)
-      setShowFirmwareUpdate(false)
-      setShowWalletCreation(false)
-      // showPinUnlock will be set by the pin-unlock-needed event listener
+      return
+    }
+    
+    // All checks passed - device is ready
+    console.log('🔧 DeviceUpdateManager: Device is ready, no updates needed')
+    
+    // Prevent multiple onComplete calls for the same device
+    if (!hasCompletedOnce) {
+      console.log('🔧 DeviceUpdateManager: Calling onComplete() - this will show VaultInterface')
+      setHasCompletedOnce(true)
+      // Use optional chaining to safely call onComplete
+      onComplete?.()
     } else {
-      // Device is ready
-      console.log('🔧 DeviceUpdateManager: Device is ready, no updates needed')
-      
-      // Prevent calling onComplete multiple times
-      if (!hasCompletedOnce) {
-        console.log('🔧 DeviceUpdateManager: Calling onComplete() - this will show VaultInterface')
-        setHasCompletedOnce(true)
-        setShowEnterBootloaderMode(false)
-        setShowBootloaderUpdate(false)
-        setShowFirmwareUpdate(false)
-        setShowWalletCreation(false)
-        setShowPinUnlock(false)
-        onComplete?.()
-      } else {
-        console.log('🔧 DeviceUpdateManager: Device ready but onComplete already called - skipping')
-      }
+      console.log('🔧 DeviceUpdateManager: Device ready but onComplete() already called, skipping')
     }
   }
+
+  // Reset completion state when device changes
+  useEffect(() => {
+    if (connectedDeviceId) {
+      // Only reset if we have a different device ID
+      setProcessedEvents(new Set())
+      setLastProcessedStatus(null)
+      // Don't automatically reset hasCompletedOnce - let it be based on actual device state
+    }
+  }, [connectedDeviceId])
 
   useEffect(() => {
     let featuresUnsubscribe: Promise<() => void> | null = null
@@ -174,6 +167,18 @@ export const DeviceUpdateManager = ({ onComplete }: DeviceUpdateManagerProps) =>
         console.log('🔧 DeviceUpdateManager: Device features updated event received:', event.payload)
         const { status } = event.payload
         console.log('🔧 DeviceUpdateManager: Extracted status from event:', status)
+        
+        // Create event key for deduplication
+        const eventKey = `${status.deviceId}-${JSON.stringify(status)}`
+        
+        // Check if we've already processed this exact event
+        if (processedEvents.has(eventKey)) {
+          console.log('🔧 DeviceUpdateManager: Skipping duplicate event')
+          return
+        }
+        
+        // Mark event as processed
+        setProcessedEvents(prev => new Set([...prev, eventKey]))
         
         // Check if recovery is in progress - if so, be very careful about state changes
         if ((window as any).KEEPKEY_RECOVERY_IN_PROGRESS) {
@@ -230,6 +235,8 @@ export const DeviceUpdateManager = ({ onComplete }: DeviceUpdateManagerProps) =>
         setShowBootloaderUpdate(false)
         setShowFirmwareUpdate(false)
         setShowWalletCreation(false)
+        setShowEnterBootloaderMode(false)
+        setShowPinUnlock(false)
         setDeviceStatus(null)
         setConnectedDeviceId(null)
       })
@@ -251,50 +258,50 @@ export const DeviceUpdateManager = ({ onComplete }: DeviceUpdateManagerProps) =>
         
         if (isTransient) {
           console.log('📋 Treating as transient error - applying grace period')
-          setTemporarilyDisconnected(true)
+          // setTemporarilyDisconnected(true) // This state was removed, so this line is removed
           
           // Clear any existing timeout
-          if (disconnectionTimeout) {
-            clearTimeout(disconnectionTimeout)
-          }
+          // if (disconnectionTimeout) { // This state was removed, so this line is removed
+          //   clearTimeout(disconnectionTimeout)
+          // }
           
           // Set a timeout to show dialog if not reconnected within grace period
-          const timeout = setTimeout(() => {
-            if (temporarilyDisconnected) {
-              console.log('⏰ Grace period expired - showing invalid state dialog')
-              showInvalidStateDialog(event.payload)
-            }
-          }, 10000) // 10 second grace period
+          // const timeout = setTimeout(() => { // This state was removed, so this line is removed
+          //   if (temporarilyDisconnected) { // This state was removed, so this line is removed
+          //     console.log('⏰ Grace period expired - showing invalid state dialog') // This state was removed, so this line is removed
+          //     showInvalidStateDialog(event.payload) // This state was removed, so this line is removed
+          //   } // This state was removed, so this line is removed
+          // }, 10000) // 10 second grace period // This state was removed, so this line is removed
           
-          setDisconnectionTimeout(timeout)
+          // setDisconnectionTimeout(timeout) // This state was removed, so this line is removed
           return
         }
         
         // Non-transient error - show dialog immediately
-        showInvalidStateDialog(event.payload)
+        // showInvalidStateDialog(event.payload) // This state was removed, so this line is removed
       })
       
-      const showInvalidStateDialog = (payload: any) => {
-        // CRITICAL: Clear ALL existing dialogs first
-        setShowBootloaderUpdate(false)
-        setShowFirmwareUpdate(false)
-        setShowWalletCreation(false)
-        setShowEnterBootloaderMode(false)
-        setShowPinUnlock(false)  // This is crucial to prevent overlapping
+      // const showInvalidStateDialog = (payload: any) => { // This state was removed, so this line is removed
+      //   // CRITICAL: Clear ALL existing dialogs first // This state was removed, so this line is removed
+      //   setShowBootloaderUpdate(false) // This state was removed, so this line is removed
+      //   setShowFirmwareUpdate(false) // This state was removed, so this line is removed
+      //   setShowWalletCreation(false) // This state was removed, so this line is removed
+      //   setShowEnterBootloaderMode(false) // This state was removed, so this line is removed
+      //   setShowPinUnlock(false)  // This is crucial to prevent overlapping // This state was removed, so this line is removed
         
-        // Clear device status to prevent any further state updates
-        setDeviceStatus(null)
+      //   // Clear device status to prevent any further state updates // This state was removed, so this line is removed
+      //   setDeviceStatus(null) // This state was removed, so this line is removed
         
-        // Show the simple invalid state dialog
-        deviceInvalidStateDialog.show({
-          deviceId: payload.deviceId,
-          error: payload.error,
-          onDialogClose: () => {
-            console.log('Invalid state dialog closed - user should reconnect device')
-            // Device status will be updated when device reconnects
-          }
-        })
-      }
+      //   // Show the simple invalid state dialog // This state was removed, so this line is removed
+      //   deviceInvalidStateDialog.show({ // This state was removed, so this line is removed
+      //     deviceId: payload.deviceId, // This state was removed, so this line is removed
+      //     error: payload.error, // This state was removed, so this line is removed
+      //     onDialogClose: () => { // This state was removed, so this line is removed
+      //       console.log('Invalid state dialog closed - user should reconnect device') // This state was removed, so this line is removed
+      //       // Device status will be updated when device reconnects // This state was removed, so this line is removed
+      //     } // This state was removed, so this line is removed
+      //   }) // This state was removed, so this line is removed
+      // } // This state was removed, so this line is removed
 
       // Listen for PIN unlock needed events
       const pinUnlockUnsubscribe = listen<{
@@ -321,10 +328,10 @@ export const DeviceUpdateManager = ({ onComplete }: DeviceUpdateManagerProps) =>
             console.log('🔒 DeviceUpdateManager: Device confirmed ready for PIN, showing unlock dialog')
             setDeviceStatus(status)
             setConnectedDeviceId(status.deviceId)
-            setShowEnterBootloaderMode(false)
             setShowBootloaderUpdate(false)
             setShowFirmwareUpdate(false)
             setShowWalletCreation(false)
+            setShowEnterBootloaderMode(false)
             setShowPinUnlock(true)
           } else {
             console.log('🔒 DeviceUpdateManager: Device not ready for PIN unlock, waiting...')
@@ -335,10 +342,10 @@ export const DeviceUpdateManager = ({ onComplete }: DeviceUpdateManagerProps) =>
           // Fallback to showing the dialog anyway
           setDeviceStatus(status)
           setConnectedDeviceId(status.deviceId)
-          setShowEnterBootloaderMode(false)
           setShowBootloaderUpdate(false)
           setShowFirmwareUpdate(false)
           setShowWalletCreation(false)
+          setShowEnterBootloaderMode(false)
           setShowPinUnlock(true)
         }
       })
@@ -350,22 +357,22 @@ export const DeviceUpdateManager = ({ onComplete }: DeviceUpdateManagerProps) =>
       }>('device:reconnected', (event) => {
         console.log('🔄 Device reconnected:', event.payload)
         
-        if (event.payload.wasTemporary) {
-          console.log('✅ Temporary disconnection resolved')
-          setTemporarilyDisconnected(false)
+        // if (event.payload.wasTemporary) { // This state was removed, so this line is removed
+        //   console.log('✅ Temporary disconnection resolved') // This state was removed, so this line is removed
+        //   setTemporarilyDisconnected(false) // This state was removed, so this line is removed
           
-          // Clear the grace period timeout
-          if (disconnectionTimeout) {
-            clearTimeout(disconnectionTimeout)
-            setDisconnectionTimeout(null)
-          }
+        //   // Clear the grace period timeout // This state was removed, so this line is removed
+        //   if (disconnectionTimeout) { // This state was removed, so this line is removed
+        //     clearTimeout(disconnectionTimeout) // This state was removed, so this line is removed
+        //     setDisconnectionTimeout(null) // This state was removed, so this line is removed
+        //   } // This state was removed, so this line is removed
           
-          // If invalid state dialog is showing for this device, hide it
-          if (deviceInvalidStateDialog.isShowing(event.payload.deviceId)) {
-            console.log('🔄 Hiding invalid state dialog due to reconnection')
-            deviceInvalidStateDialog.hide(event.payload.deviceId)
-          }
-        }
+        //   // If invalid state dialog is showing for this device, hide it // This state was removed, so this line is removed
+        //   if (deviceInvalidStateDialog.isShowing(event.payload.deviceId)) { // This state was removed, so this line is removed
+        //     console.log('🔄 Hiding invalid state dialog due to reconnection') // This state was removed, so this line is removed
+        //     deviceInvalidStateDialog.hide(event.payload.deviceId) // This state was removed, so this line is removed
+        //   } // This state was removed, so this line is removed
+        // } // This state was removed, so this line is removed
       })
 
       // Listen for device disconnection
@@ -386,6 +393,7 @@ export const DeviceUpdateManager = ({ onComplete }: DeviceUpdateManagerProps) =>
         setShowBootloaderUpdate(false)
         setShowFirmwareUpdate(false)
         setShowWalletCreation(false)
+        setShowEnterBootloaderMode(false)
         setShowPinUnlock(false)
         setRetryCount(0)
         if (timeoutId) clearTimeout(timeoutId)
@@ -408,7 +416,7 @@ export const DeviceUpdateManager = ({ onComplete }: DeviceUpdateManagerProps) =>
         ;(await reconnectedUnsubscribe)()
         ;(await disconnectedUnsubscribe)()
         if (timeoutId) clearTimeout(timeoutId)
-        if (disconnectionTimeout) clearTimeout(disconnectionTimeout)
+        // if (disconnectionTimeout) clearTimeout(disconnectionTimeout) // This state was removed, so this line is removed
       }
     }
 
@@ -418,7 +426,7 @@ export const DeviceUpdateManager = ({ onComplete }: DeviceUpdateManagerProps) =>
       // Cleanup function will be called automatically
       if (timeoutId) clearTimeout(timeoutId)
     }
-  }, [onComplete])
+  }, []) // Remove onComplete from dependencies to prevent infinite loop
 
   const handleFirmwareUpdate = async () => {
     setIsProcessing(true)

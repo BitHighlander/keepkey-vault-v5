@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { listen } from '@tauri-apps/api/event';
 import { invoke } from '@tauri-apps/api/core';
 import "./App.css";
@@ -59,6 +59,7 @@ function App() {
     const [serverReady, setServerReady] = useState<boolean>(false)
     const [serverError, setServerError] = useState<string | null>(null)
     const [isRestarting, setIsRestarting] = useState<boolean>(false)
+    const [frontendReadySignalSent, setFrontendReadySignalSent] = useState<boolean>(false)
     
     const troubleshootingWizard = useTroubleshootingWizard()
 
@@ -70,6 +71,7 @@ function App() {
         setDeviceUpdateComplete(false)
         setServerReady(false)
         setServerError(null)
+        setFrontendReadySignalSent(false) // Reset frontend ready signal state
     }
 
     // AppContent is an inner component with access to DialogContext
@@ -137,6 +139,7 @@ function App() {
                 setDeviceConnected(false);
                 setDeviceInfo(null);
                 setDeviceUpdateComplete(false);
+                setFrontendReadySignalSent(false); // Reset frontend ready signal state
                 
                 // Restart backend
                 await invoke('restart_backend_startup');
@@ -200,13 +203,18 @@ function App() {
                 try {
                     console.log('🎯 Setting up event listeners...');
                     
-                    // Signal backend that frontend is ready to receive events FIRST
-                    try {
-                        console.log('🎯 Signaling backend that frontend is ready...');
-                        await invoke('frontend_ready');
-                        console.log('✅ Frontend ready signal sent successfully');
-                    } catch (error) {
-                        console.log('DeviceUpdateManager: frontend_ready command failed:', error);
+                    // Signal backend that frontend is ready to receive events FIRST (only once)
+                    if (!frontendReadySignalSent) {
+                        try {
+                            console.log('🎯 Signaling backend that frontend is ready...');
+                            await invoke('frontend_ready');
+                            console.log('✅ Frontend ready signal sent successfully');
+                            setFrontendReadySignalSent(true);
+                        } catch (error) {
+                            console.log('DeviceUpdateManager: frontend_ready command failed:', error);
+                        }
+                    } else {
+                        console.log('🎯 Frontend ready signal already sent, skipping...');
                     }
                     
                     // TEMPORARY: Check if servers are running and manually set server ready
@@ -276,8 +284,8 @@ function App() {
                         if (payload.features) {
                             setDeviceConnected(true);
                             setDeviceInfo({ features: payload.features, error: null });
-                            // Reset update completion state for new device connections
-                            setDeviceUpdateComplete(false);
+                            // Don't reset deviceUpdateComplete here - let DeviceUpdateManager handle it
+                            // Only reset on actual device disconnection, not feature updates
                         }
                     });
 
@@ -360,6 +368,25 @@ function App() {
           setHasCopied(true);
           setTimeout(() => setHasCopied(false), 2000);
         };
+
+        // Move onComplete callback BEFORE any early returns to fix React Hooks error
+        const handleDeviceUpdateComplete = useCallback(() => {
+          console.log('📱 [App] DeviceUpdateManager onComplete callback triggered');
+          console.log('📱 [App] Current state before updates:', {
+            deviceUpdateComplete,
+            loadingStatus,
+            deviceConnected
+          });
+          console.log('📱 [App] Setting deviceUpdateComplete to true');
+          setDeviceUpdateComplete(true);
+          console.log('📱 [App] Setting loadingStatus to "Device ready"');
+          setLoadingStatus('Device ready');
+          // Also ensure deviceConnected is true if not already
+          if (!deviceConnected) {
+            console.log('📱 [App] Also setting deviceConnected to true from onComplete');
+            setDeviceConnected(true);
+          }
+        }, [deviceUpdateComplete, loadingStatus, deviceConnected]);
 
         // Show the main vault interface ONLY when device is ready, updates are complete, AND server is ready
         console.log('📱 [App] Checking if should show VaultInterface:', {
@@ -449,23 +476,7 @@ function App() {
 
               {/* Device update manager - handles bootloader/firmware updates and wallet creation */}
               <DeviceUpdateManager 
-                onComplete={() => {
-                  console.log('📱 [App] DeviceUpdateManager onComplete callback triggered');
-                  console.log('📱 [App] Current state before updates:', {
-                    deviceUpdateComplete,
-                    loadingStatus,
-                    deviceConnected
-                  });
-                  console.log('📱 [App] Setting deviceUpdateComplete to true');
-                  setDeviceUpdateComplete(true);
-                  console.log('📱 [App] Setting loadingStatus to "Device ready"');
-                  setLoadingStatus('Device ready');
-                  // Also ensure deviceConnected is true if not already
-                  if (!deviceConnected) {
-                    console.log('📱 [App] Also setting deviceConnected to true from onComplete');
-                    setDeviceConnected(true);
-                  }
-                }}
+                onComplete={handleDeviceUpdateComplete}
               />
 
               {/* REST and MCP links in bottom right corner */}

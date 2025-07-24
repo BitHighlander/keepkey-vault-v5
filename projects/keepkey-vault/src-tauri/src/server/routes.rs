@@ -17,6 +17,11 @@ use crate::server::context::{self};
 pub struct HealthResponse {
     pub status: String,
     pub version: String,
+    // Add cache information for pioneer-sdk kkapi detection
+    pub available: bool,
+    pub device_connected: bool,
+    pub cached_pubkeys: usize,
+    pub cached_balances: usize,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -81,10 +86,29 @@ pub struct Features {
     ),
     tag = "system"
 )]
-pub async fn health_check() -> Json<HealthResponse> {
+pub async fn health_check(State(state): State<Arc<ServerState>>) -> Json<HealthResponse> {
+    // Get cache information for pioneer-sdk kkapi detection
+    let (cached_pubkeys, cached_balances, device_connected) = match crate::commands::get_cache_manager(&state.cache_manager).await {
+        Ok(cache) => {
+            let pubkeys = cache.count_cached_pubkeys().await.unwrap_or(0);
+            let balances = cache.count_cached_balances().await.unwrap_or(0);
+            
+            // Check if device is connected
+            let devices = crate::commands::get_connected_devices().await.unwrap_or_default();
+            let connected = !devices.is_empty();
+            
+            (pubkeys, balances, connected)
+        }
+        Err(_) => (0, 0, false),
+    };
+    
     Json(HealthResponse {
         status: "healthy".to_string(),
         version: "2.0.0".to_string(),
+        available: true,
+        device_connected,
+        cached_pubkeys,
+        cached_balances,
     })
 }
 
