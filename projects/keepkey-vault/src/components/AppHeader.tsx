@@ -36,16 +36,16 @@ export const AppHeader = () => {
       height="40px"
     >
       <HStack justify="space-between" align="center" height="100%">
-        <HStack gap={3}>
-          <Text fontSize="sm" fontWeight="bold" color="white">
-            KeepKey Vault v{version}
-          </Text>
-        </HStack>
+        <Box />
         
-        <HStack gap={2}>
+        <HStack gap={4}>
           {/* Dev tools functionality will be handled through config */}
           <Text fontSize="xs" color="gray.500">
             Press F12 or Cmd+Opt+I for DevTools
+          </Text>
+          {/* Version number in top right */}
+          <Text fontSize="xs" color="gray.400" fontFamily="mono">
+            v{version}
           </Text>
         </HStack>
       </HStack>

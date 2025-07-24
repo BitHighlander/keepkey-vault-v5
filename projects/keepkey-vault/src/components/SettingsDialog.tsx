@@ -43,6 +43,9 @@ export const SettingsDialog = ({ isOpen, onClose }: SettingsDialogProps) => {
   const [showFirmwareUpdate, setShowFirmwareUpdate] = useState(false)
   const [deviceStatus, setDeviceStatus] = useState<DeviceStatus | null>(null)
   
+  // Version state
+  const [version, setVersion] = useState<string>('')
+  
   // Copy state for URLs
   const [hasCopiedMcp, setHasCopiedMcp] = useState(false)
   const [hasCopiedRest, setHasCopiedRest] = useState(false)
@@ -78,6 +81,20 @@ export const SettingsDialog = ({ isOpen, onClose }: SettingsDialogProps) => {
   
   const firmwareWizard = useFirmwareUpdateWizard()
   const walletCreationWizard = useWalletCreationWizard()
+
+  // Get app version on mount
+  useEffect(() => {
+    const getVersion = async () => {
+      try {
+        const appVersion = await invoke<string>('get_app_version')
+        setVersion(appVersion)
+      } catch (error) {
+        console.error('Failed to get app version:', error)
+        setVersion('0.1.2') // fallback to current version
+      }
+    }
+    getVersion()
+  }, [])
   
   // Load API status
   const loadApiStatus = async () => {
@@ -571,7 +588,7 @@ export const SettingsDialog = ({ isOpen, onClose }: SettingsDialogProps) => {
           }}
         >
           <DialogHeader borderBottomWidth="1px" borderColor="gray.700" pb={4}>
-            <DialogTitle color="white">Settings</DialogTitle>
+            <DialogTitle color="white">KeepKey Vault v{version}</DialogTitle>
             <DialogCloseTrigger color="gray.400" _hover={{ color: "white" }}>
               <FaTimes />
             </DialogCloseTrigger>
@@ -640,6 +657,28 @@ export const SettingsDialog = ({ isOpen, onClose }: SettingsDialogProps) => {
               <Tabs.Content value="general" minHeight="400px" overflowY="auto">
                 <VStack align="stretch" gap={4}>
                   <Text color="white" fontSize="lg" fontWeight="semibold">General Settings</Text>
+                  
+                  {/* App Version Info */}
+                  <Box bg="gray.800" p={4} borderRadius="md" border="1px solid" borderColor="gray.700">
+                    <VStack align="stretch" gap={3}>
+                      <HStack gap={2}>
+                        <LuSettings color="blue.400" />
+                        <Text color="white" fontWeight="medium">Application Information</Text>
+                      </HStack>
+                      <HStack justify="space-between" align="center">
+                        <Text color="gray.400" fontSize="sm">Version</Text>
+                        <Text color="blue.400" fontSize="sm" fontFamily="mono" fontWeight="semibold">
+                          v{version}
+                        </Text>
+                      </HStack>
+                      <HStack justify="space-between" align="center">
+                        <Text color="gray.400" fontSize="sm">Application</Text>
+                        <Text color="white" fontSize="sm" fontWeight="medium">
+                          KeepKey Vault
+                        </Text>
+                      </HStack>
+                    </VStack>
+                  </Box>
                   
                   {/* Language Settings */}
                   <Box bg="gray.800" p={4} borderRadius="md" border="1px solid" borderColor="gray.700" opacity={0.6}>
