@@ -264,6 +264,11 @@ impl DeviceWorker {
                 let _ = respond_to.send(result);
             }
             DeviceCmd::Shutdown { respond_to } => {
+                // Clean up transport on shutdown
+                if self.transport.is_some() {
+                    info!("🔌 Releasing transport handle for device {} on shutdown", self.device_id);
+                    self.transport = None;
+                }
                 let _ = respond_to.send(Ok(()));
                 return Ok(());
             }
@@ -274,15 +279,10 @@ impl DeviceWorker {
         let queue_wait = device_start.duration_since(enqueued_at);
         
         self.metrics.record_operation(queue_wait, device_rtt, total_time);
-    
-    // Always drop transport after each command to avoid exclusive handle issues,
-    // it will be recreated lazily on the next command.
-    if self.transport.is_some() {
-        info!("🔌 Releasing transport handle for device {} after operation", self.device_id);
-    }
-    self.transport = None;
-    
-    Ok(())
+        
+        // Transport is kept alive across commands for performance
+        // It will only be recreated on error in ensure_transport()
+        Ok(())
     }
     
 
@@ -468,11 +468,39 @@ impl DeviceWorker {
         let transport = self.ensure_transport().await?;
         
         // Use appropriate handler based on current state and message type
-        let response = if use_pin_flow_handler {
+        let response = match if use_pin_flow_handler {
             info!("🔐 Using PIN flow handler for message {:?}", message.message_type());
-            transport.with_pin_flow_handler().handle(message)?
+            transport.with_pin_flow_handler().handle(message.clone())
         } else {
-            transport.with_standard_handler().handle(message)?
+            transport.with_standard_handler().handle(message.clone())
+        } {
+            Ok(response) => response,
+            Err(e) => {
+                // Check if this is a transport/communication error
+                let error_str = e.to_string();
+                if error_str.contains("timeout") || 
+                   error_str.contains("device disconnected") ||
+                   error_str.contains("Entity not found") ||
+                   error_str.contains("No data received") ||
+                   error_str.contains("Communication") {
+                    // Transport error - drop it and retry once
+                    warn!("🔄 Transport error detected, recreating transport: {}", e);
+                    self.transport = None;
+                    
+                    // Get a fresh transport
+                    let transport = self.ensure_transport().await?;
+                    
+                    // Retry the operation once
+                    if use_pin_flow_handler {
+                        transport.with_pin_flow_handler().handle(message)?
+                    } else {
+                        transport.with_standard_handler().handle(message)?
+                    }
+                } else {
+                    // Not a transport error, propagate it
+                    return Err(e.into());
+                }
+            }
         };
         
         // Update PIN flow state based on response

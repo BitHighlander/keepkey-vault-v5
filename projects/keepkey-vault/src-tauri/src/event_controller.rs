@@ -767,6 +767,8 @@ async fn try_get_device_features(device: &FriendlyUsbDevice, app_handle: &AppHan
                 handle.clone()
             } else {
                 // Create a new worker only if one doesn't exist
+                // Use the centralized get_or_create_device_queue function if available
+                // For now, create a new worker (this code path should be avoided in production)
                 let handle = keepkey_rust::device_queue::DeviceQueueFactory::spawn_worker(
                     device.unique_id.clone(),
                     device.clone()

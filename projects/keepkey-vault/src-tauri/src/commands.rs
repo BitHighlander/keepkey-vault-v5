@@ -715,19 +715,8 @@ pub async fn get_device_status(
         .find(|d| d.unique_id == device_id);
     
     if let Some(device_info) = device_info {
-        // Get or create device queue handle
-        let queue_handle = {
-            let mut manager = queue_manager.lock().await;
-            
-            if let Some(handle) = manager.get(&device_id) {
-                handle.clone()
-            } else {
-                // Spawn a new device worker
-                let handle = DeviceQueueFactory::spawn_worker(device_id.clone(), device_info.clone());
-                manager.insert(device_id.clone(), handle.clone());
-                handle
-            }
-        };
+        // Get or create device queue handle using centralized function
+        let queue_handle = get_or_create_device_queue(&device_id, &queue_manager).await?;
         
         // Fetch device features through the queue
         let features = match tokio::time::timeout(
@@ -978,42 +967,21 @@ pub async fn wipe_device(
         eprintln!("Failed to log wipe device request: {}", e);
     }
     
-    // Get or create device queue handle
-    let queue_handle = {
-        let mut manager = queue_manager.lock().await;
-        
-        if let Some(handle) = manager.get(&device_id) {
-            handle.clone()
-        } else {
-            // Find the device by ID
-            let devices = keepkey_rust::features::list_connected_devices();
-            let device_info = devices
-                .iter()
-                .find(|d| d.unique_id == device_id);
-                
-            match device_info {
-                Some(device_info) => {
-                    // Spawn a new device worker
-                    let handle = DeviceQueueFactory::spawn_worker(device_id.clone(), device_info.clone());
-                    manager.insert(device_id.clone(), handle.clone());
-                    handle
-                }
-                None => {
-                    let error = format!("Device {} not found", device_id);
-                    
-                    // Log the error response
-                    let response_data = serde_json::json!({
-                        "error": error,
-                        "operation": "wipe_device"
-                    });
-                    
-                    if let Err(e) = log_device_response(&device_id, &request_id, false, &response_data, Some(&error)).await {
-                        eprintln!("Failed to log wipe device error response: {}", e);
-                    }
-                    
-                    return Err(error);
-                }
+    // Get or create device queue handle using centralized function
+    let queue_handle = match get_or_create_device_queue(&device_id, &queue_manager).await {
+        Ok(handle) => handle,
+        Err(error) => {
+            // Log the error response
+            let response_data = serde_json::json!({
+                "error": error,
+                "operation": "wipe_device"
+            });
+            
+            if let Err(e) = log_device_response(&device_id, &request_id, false, &response_data, Some(&error)).await {
+                eprintln!("Failed to log wipe device error response: {}", e);
             }
+            
+            return Err(error);
         }
     };
     
@@ -1169,41 +1137,20 @@ pub async fn set_device_label(
     }
     
     // Get or create device queue handle
-    let queue_handle = {
-        let mut manager = queue_manager.lock().await;
-        
-        if let Some(handle) = manager.get(&device_id) {
-            handle.clone()
-        } else {
-            // Find the device by ID
-            let devices = keepkey_rust::features::list_connected_devices();
-            let device_info = devices
-                .iter()
-                .find(|d| d.unique_id == device_id);
-                
-            match device_info {
-                Some(device_info) => {
-                    // Spawn a new device worker
-                    let handle = DeviceQueueFactory::spawn_worker(device_id.clone(), device_info.clone());
-                    manager.insert(device_id.clone(), handle.clone());
-                    handle
-                }
-                None => {
-                    let error = format!("Device {} not found", device_id);
-                    
-                    // Log the error response
-                    let response_data = serde_json::json!({
-                        "error": error,
-                        "operation": "set_device_label"
-                    });
-                    
-                    if let Err(e) = log_device_response(&device_id, &request_id, false, &response_data, Some(&error)).await {
-                        eprintln!("Failed to log set device label error response: {}", e);
-                    }
-                    
-                    return Err(error);
-                }
+    let queue_handle = match get_or_create_device_queue(&device_id, &queue_manager).await {
+        Ok(handle) => handle,
+        Err(error) => {
+            // Log the error response
+            let response_data = serde_json::json!({
+                "error": error,
+                "operation": "set_device_label"
+            });
+            
+            if let Err(e) = log_device_response(&device_id, &request_id, false, &response_data, Some(&error)).await {
+                eprintln!("Failed to log set device label error response: {}", e);
             }
+            
+            return Err(error);
         }
     };
     
@@ -1350,19 +1297,38 @@ pub async fn get_connected_devices_with_features(
                 eprintln!("Failed to log device features request: {}", e);
             }
             
-            // Get or create device queue handle
-            let queue_handle = {
-                let mut manager = queue_manager.lock().await;
-                
-                if let Some(handle) = manager.get(&device_id) {
-                    handle.clone()
-                } else {
-                    // Spawn a new device worker
-                    let handle = DeviceQueueFactory::spawn_worker(device_id.clone(), device.clone());
-                    manager.insert(device_id.clone(), handle.clone());
-                    handle
-                }
-            };
+                            // Get or create device queue handle using centralized function
+                let queue_handle = match get_or_create_device_queue(&device_id, &queue_manager).await {
+                    Ok(handle) => handle,
+                    Err(e) => {
+                        eprintln!("Failed to get or create device queue for {}: {}", device_id, e);
+                        
+                        // Log failed queue creation
+                        let device_response_data = serde_json::json!({
+                            "error": format!("Failed to get device queue: {}", e),
+                            "operation": "get_features_for_device"
+                        });
+                        
+                        if let Err(log_err) = log_device_response(&device_id, &device_request_id, false, &device_response_data, Some(&format!("Failed to get device queue: {}", e))).await {
+                            eprintln!("Failed to log device queue error response: {}", log_err);
+                        }
+                        
+                        return serde_json::json!({
+                            "device": {
+                                "unique_id": device_id,
+                                "name": device.name,
+                                "vid": device.vid,
+                                "pid": device.pid,
+                                "manufacturer": device.manufacturer,
+                                "product": device.product,
+                                "serial_number": device.serial_number,
+                                "is_keepkey": device.is_keepkey,
+                            },
+                            "features": null,
+                            "error": format!("Failed to get device queue: {}", e)
+                        });
+                    }
+                };
             
             // Try to fetch features through the queue
             let features = match tokio::time::timeout(
@@ -2240,29 +2206,14 @@ pub async fn initialize_device_pin(
         sessions.insert(session_id.clone(), session.clone());
     }
     
-    // Get or create device queue handle
-    let queue_handle = {
-        let mut manager = queue_manager.lock().await;
-        
-        if let Some(handle) = manager.get(&device_id) {
-            handle.clone()
-        } else {
-            // Find the device by ID
-            let devices = keepkey_rust::features::list_connected_devices();
-            let device_info = devices
-                .iter()
-                .find(|d| d.unique_id == device_id)
-                .ok_or_else(|| {
-                    // Clean up session on device not found
-                    let mut sessions = PIN_SESSIONS.lock().unwrap_or_else(|_| panic!("Failed to lock PIN sessions"));
-                    sessions.remove(&session_id);
-                    format!("Device {} not found", device_id)
-                })?;
-            
-            // Spawn a new device worker
-            let handle = keepkey_rust::device_queue::DeviceQueueFactory::spawn_worker(device_id.clone(), device_info.clone());
-            manager.insert(device_id.clone(), handle.clone());
-            handle
+    // Get or create device queue handle using centralized function
+    let queue_handle = match get_or_create_device_queue(&device_id, &queue_manager).await {
+        Ok(handle) => handle,
+        Err(error) => {
+            // Clean up session on device not found
+            let mut sessions = PIN_SESSIONS.lock().unwrap_or_else(|_| panic!("Failed to lock PIN sessions"));
+            sessions.remove(&session_id);
+            return Err(error);
         }
     };
     
@@ -2730,26 +2681,12 @@ pub async fn send_pin_unlock_response(
     log::info!("Converted positions to PIN string for device communication: {}", pin_string);
     
     // Get or create device queue handle  
-    let queue_handle = {
-        let mut manager = queue_manager.lock().await;
-        match manager.get(&device_id) {
-            Some(handle) => handle.clone(),
-            None => {
-                // Find the device by ID
-                let devices = keepkey_rust::features::list_connected_devices();
-                let device_info = devices
-                    .iter()
-                    .find(|d| d.unique_id == device_id)
-                    .ok_or_else(|| format!("Device {} not found", device_id))?;
-                
-                // Spawn a new device worker using the factory
-                let handle = keepkey_rust::device_queue::DeviceQueueFactory::spawn_worker(
-                    device_id.clone(),
-                    device_info.clone()
-                );
-                manager.insert(device_id.clone(), handle.clone());
-                handle
-            }
+    let queue_handle = match get_or_create_device_queue(&device_id, &queue_manager).await {
+        Ok(handle) => handle,
+        Err(error) => {
+            // Clean up PIN flow marking on error
+            let _ = unmark_device_in_pin_flow(&device_id);
+            return Err(error);
         }
     };
     
@@ -3149,29 +3086,14 @@ pub async fn start_device_recovery(
     // Mark device as being in recovery flow
     mark_device_in_recovery_flow(&device_id)?;
     
-    // Get or create device queue handle
-    let queue_handle = {
-        let mut manager = queue_manager.lock().await;
-        
-        if let Some(handle) = manager.get(&device_id) {
-            handle.clone()
-        } else {
-            // Find the device by ID
-            let devices = keepkey_rust::features::list_connected_devices();
-            let device_info = devices
-                .iter()
-                .find(|d| d.unique_id == device_id)
-                .ok_or_else(|| {
-                    // Clean up session on device not found
-                    let mut sessions = RECOVERY_SESSIONS.lock().unwrap_or_else(|_| panic!("Failed to lock recovery sessions"));
-                    sessions.remove(&session_id);
-                    format!("Device {} not found", device_id)
-                })?;
-            
-            // Spawn a new device worker
-            let handle = keepkey_rust::device_queue::DeviceQueueFactory::spawn_worker(device_id.clone(), device_info.clone());
-            manager.insert(device_id.clone(), handle.clone());
-            handle
+    // Get or create device queue handle using centralized function
+    let queue_handle = match get_or_create_device_queue(&device_id, &queue_manager).await {
+        Ok(handle) => handle,
+        Err(error) => {
+            // Clean up session on device not found
+            let mut sessions = RECOVERY_SESSIONS.lock().unwrap_or_else(|_| panic!("Failed to lock recovery sessions"));
+            sessions.remove(&session_id);
+            return Err(error);
         }
     };
     
@@ -3654,28 +3576,13 @@ pub async fn start_seed_verification(
     mark_device_in_recovery_flow(&device_id)?;
     
     // Get or create device queue handle
-    let queue_handle = {
-        let mut manager = queue_manager.lock().await;
-        
-        if let Some(handle) = manager.get(&device_id) {
-            handle.clone()
-        } else {
-            // Find the device by ID
-            let devices = keepkey_rust::features::list_connected_devices();
-            let device_info = devices
-                .iter()
-                .find(|d| d.unique_id == device_id)
-                .ok_or_else(|| {
-                    // Clean up session on device not found
-                    let mut sessions = VERIFICATION_SESSIONS.lock().unwrap_or_else(|_| panic!("Failed to lock verification sessions"));
-                    sessions.remove(&session_id);
-                    format!("Device {} not found", device_id)
-                })?;
-            
-            // Spawn a new device worker
-            let handle = keepkey_rust::device_queue::DeviceQueueFactory::spawn_worker(device_id.clone(), device_info.clone());
-            manager.insert(device_id.clone(), handle.clone());
-            handle
+    let queue_handle = match get_or_create_device_queue(&device_id, &queue_manager).await {
+        Ok(handle) => handle,
+        Err(error) => {
+            // Clean up session on device not found
+            let mut sessions = VERIFICATION_SESSIONS.lock().unwrap_or_else(|_| panic!("Failed to lock verification sessions"));
+            sessions.remove(&session_id);
+            return Err(error);
         }
     };
     

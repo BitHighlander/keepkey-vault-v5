@@ -2481,6 +2481,8 @@ async fn get_device_queue_or_fallback(device_id: &str) -> Result<DeviceQueueHand
         .ok_or_else(|| format!("Device {} not found in registry", device_id))?;
     
     // Create a new queue handle using the device queue factory
+    // NOTE: This is a fallback function that creates a new worker each time
+    // In production, use a centralized queue manager to reuse workers
     let queue_handle = crate::device_queue::DeviceQueueFactory::spawn_worker(
         device_id.to_string(), 
         device_entry.device.clone()

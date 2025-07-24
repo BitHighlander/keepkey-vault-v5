@@ -133,7 +133,7 @@ impl FrontloadController {
         
         let start_time = std::time::Instant::now();
         let mut total_cached = 0;
-        let mut progress = 0;
+        let mut progress;
         let total_paths = cached_paths.len();
         let mut errors = Vec::new();
         
