@@ -60,6 +60,7 @@ function App() {
     const [serverError, setServerError] = useState<string | null>(null)
     const [isRestarting, setIsRestarting] = useState<boolean>(false)
     const [frontendReadySignalSent, setFrontendReadySignalSent] = useState<boolean>(false)
+    const [eventListenersSetup, setEventListenersSetup] = useState<boolean>(false)
     
     const troubleshootingWizard = useTroubleshootingWizard()
 
@@ -72,6 +73,7 @@ function App() {
         setServerReady(false)
         setServerError(null)
         setFrontendReadySignalSent(false) // Reset frontend ready signal state
+        setEventListenersSetup(false) // Reset event listeners state
     }
 
     // AppContent is an inner component with access to DialogContext
@@ -202,6 +204,12 @@ function App() {
 
             const setupEventListeners = async () => {
                 try {
+                    // Prevent duplicate event listener setup
+                    if (eventListenersSetup) {
+                        console.log('🎯 Event listeners already set up, skipping...');
+                        return;
+                    }
+                    
                     console.log('🎯 Setting up event listeners...');
                     
                     // Signal backend that frontend is ready to receive events FIRST (only once)
@@ -347,6 +355,7 @@ function App() {
                     });
 
                     console.log('✅ All event listeners set up successfully');
+                    setEventListenersSetup(true);
                     
                     // Return cleanup function that removes all listeners
                     return () => {
@@ -359,6 +368,7 @@ function App() {
                         if (unlistenServerReady) unlistenServerReady();
                         if (unlistenServerError) unlistenServerError();
                         if (unlistenOnboardingRequired) unlistenOnboardingRequired();
+                        setEventListenersSetup(false); // Reset so listeners can be set up again if needed
                     };
                     
                 } catch (error) {
@@ -445,8 +455,8 @@ function App() {
               alignItems="center"
               justifyContent="center"
             >
-              {/* Clickable Logo in the center */}
-              {!onboardingActive && (
+              {/* Clickable Logo in the center - Show during loading and connecting */}
+              {(loadingStatus !== "Device ready" || !onboardingActive) && (
                 <Logo 
                 width="100px" 
                 onClick={handleLogoClick}
