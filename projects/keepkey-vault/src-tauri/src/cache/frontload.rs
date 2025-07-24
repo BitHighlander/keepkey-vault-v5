@@ -425,11 +425,22 @@ impl FrontloadController {
         
         // For Bitcoin-like coins, get both XPUB (account level) and addresses (master level)
         if matches!(cached_path.blockchain.as_str(), "bitcoin" | "bitcoincash" | "litecoin" | "dogecoin" | "dash") {
+            
+            // 🔧 FIX: Map lowercase blockchain names to capitalized coin names that device expects
+            let device_coin_name = match cached_path.blockchain.as_str() {
+                "bitcoin" => "Bitcoin",
+                "bitcoincash" => "Bitcoin Cash", 
+                "litecoin" => "Litecoin",
+                "dogecoin" => "Dogecoin",
+                "dash" => "Dash",
+                _ => &cached_path.blockchain, // fallback to original
+            };
+            
             // 1. Get XPUB at account level (m/44'/0'/0') - but check cache first
             if !self.is_already_cached(device_id, &account_path_str, &cached_path.blockchain, cached_path.script_type.as_deref().unwrap_or("")).await? {
                 let xpub_request = DeviceRequest::GetPublicKey {
                     path: account_path_str.clone(),
-                    coin_name: Some(cached_path.blockchain.clone()),
+                    coin_name: Some(device_coin_name.to_string()),
                     script_type: cached_path.script_type.clone(),
                     ecdsa_curve_name: Some(cached_path.curve.clone()),
                     show_display: Some(cached_path.show_display),
@@ -465,7 +476,7 @@ impl FrontloadController {
             if !self.is_already_cached(device_id, &master_path_str, &cached_path.blockchain, cached_path.script_type.as_deref().unwrap_or("")).await? {
                 let address_request = DeviceRequest::GetAddress {
                     path: master_path_str.clone(),
-                    coin_name: cached_path.blockchain.clone(),
+                    coin_name: device_coin_name.to_string(),
                     script_type: cached_path.script_type.clone(),
                     show_display: Some(cached_path.show_display),
                 };
@@ -810,7 +821,7 @@ impl FrontloadController {
                 },
                 "dogecoin" => {
                     if let Some(xpub_val) = xpub {
-                        (xpub_val, "bip122:1a91e3dace36e2be3bf030a65679fe82/slip44:3".to_string())
+                        (xpub_val, "bip122:00000000001a91e3dace36e2be3bf030/slip44:3".to_string())  // 🔧 FIX: Correct Dogecoin CAIP
                     } else {
                         log::debug!("No xpub for dogecoin");
                         continue;
@@ -826,7 +837,7 @@ impl FrontloadController {
                 },
                 "dash" => {
                     if let Some(xpub_val) = xpub {
-                        (xpub_val, "bip122:0000ffd590b1485b3caadc19b22e637/slip44:5".to_string())
+                        (xpub_val, "bip122:000007d91d1254d60e2dd1ae58038307/slip44:5".to_string())  // 🔧 FIX: Correct Dash CAIP
                     } else {
                         log::debug!("No xpub for dash");
                         continue;
@@ -834,9 +845,34 @@ impl FrontloadController {
                 },
                 "ripple" => {
                     if let Some(addr) = address {
-                        (addr, "ripple:1/slip44:144".to_string())
+                        (addr, "ripple:4109c6f2045fc7eff4cde8f9905d19c2/slip44:144".to_string())  // 🔧 FIX: Correct Ripple CAIP
                     } else {
                         log::debug!("No address for ripple");
+                        continue;
+                    }
+                },
+                // 🔧 FIX: Add mappings for capitalized coin names (from device protocol)
+                "Dogecoin" => {
+                    if let Some(xpub_val) = xpub {
+                        (xpub_val, "bip122:00000000001a91e3dace36e2be3bf030/slip44:3".to_string())
+                    } else {
+                        log::debug!("No xpub for Dogecoin");
+                        continue;
+                    }
+                },
+                "Dash" => {
+                    if let Some(xpub_val) = xpub {
+                        (xpub_val, "bip122:000007d91d1254d60e2dd1ae58038307/slip44:5".to_string())
+                    } else {
+                        log::debug!("No xpub for Dash");
+                        continue;
+                    }
+                },
+                "Ripple" => {
+                    if let Some(addr) = address {
+                        (addr, "ripple:4109c6f2045fc7eff4cde8f9905d19c2/slip44:144".to_string())
+                    } else {
+                        log::debug!("No address for Ripple");
                         continue;
                     }
                 },
@@ -1237,21 +1273,21 @@ impl FrontloadController {
         let coin_name = match blockchain.chain_type.as_str() {
             "evm" => "ethereum",  // All EVM chains use ethereum coin_name
             "utxo" => match blockchain.symbol.to_lowercase().as_str() {
-                "btc" => "bitcoin",
-                "bch" => "bitcoincash", 
-                "ltc" => "litecoin",
-                "doge" => "dogecoin",
-                "dash" => "dash",
+                "btc" => "Bitcoin",
+                "bch" => "Bitcoin Cash", 
+                "ltc" => "Litecoin",
+                "doge" => "Dogecoin",  // 🔧 FIX: Capitalized for device protocol
+                "dash" => "Dash",      // 🔧 FIX: Capitalized for device protocol
                 _ => &blockchain.symbol.to_lowercase(),
             },
             "cosmos" => match blockchain.symbol.to_lowercase().as_str() {
-                "atom" => "cosmos",
+                "atom" => "cosmos",  // Cosmos chains use lowercase for protocol names
                 "osmo" => "osmosis", 
                 "rune" => "thorchain",
                 "cacao" => "mayachain",
                 _ => &blockchain.symbol.to_lowercase(),
             },
-            "ripple" => "ripple",
+            "ripple" => "Ripple",  // 🔧 FIX: Capitalized for device protocol
             _ => &blockchain.symbol.to_lowercase(),
         };
         
