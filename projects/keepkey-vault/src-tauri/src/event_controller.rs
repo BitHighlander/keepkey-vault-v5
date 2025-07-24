@@ -316,13 +316,43 @@ impl EventController {
                                 } else {
                                     println!("📡 Successfully emitted/queued device:ready for {}", device_for_features.unique_id);
                                     
-                                    // 🚀 Trigger automatic frontload for ready devices
-                                    println!("🚀 Device {} is ready, starting automatic frontload...", device_for_features.unique_id);
-                                    
-                                    let device_id_for_frontload = device_for_features.unique_id.clone();
-                                    let app_for_frontload = app_for_features.clone();
+                                    // 🔍 Check onboarding status before triggering frontload
+                                    let device_id_for_onboarding_check = device_for_features.unique_id.clone();
+                                    let app_for_onboarding_check = app_for_features.clone();
                                     
                                     tauri::async_runtime::spawn(async move {
+                                        // Check if user has completed onboarding first
+                                        let is_onboarded = match crate::commands::is_onboarded().await {
+                                            Ok(onboarded) => onboarded,
+                                            Err(e) => {
+                                                println!("⚠️ Failed to check onboarding status: {}", e);
+                                                false // Default to not onboarded on error
+                                            }
+                                        };
+                                        
+                                        if !is_onboarded {
+                                            println!("📚 Device {} is ready, but user has NOT completed onboarding - proceeding with frontload AND showing onboarding", device_id_for_onboarding_check);
+                                            
+                                            // Emit onboarding event but continue with frontload (don't return early)
+                                            let onboarding_needed_payload = serde_json::json!({
+                                                "device_id": device_id_for_onboarding_check,
+                                                "status": "device_ready_onboarding_needed",
+                                                "message": "Device is ready and frontload will proceed, but onboarding dialog will be shown"
+                                            });
+                                            
+                                            if let Err(e) = crate::commands::emit_or_queue_event(&app_for_onboarding_check, "device:onboarding-required", onboarding_needed_payload).await {
+                                                println!("❌ Failed to emit onboarding required event: {}", e);
+                                            }
+                                            // Continue with frontload below instead of returning
+                                        }
+                                        
+                                        // User is onboarded, proceed with frontload
+                                        println!("✅ User has completed onboarding - proceeding with automatic frontload for device {}", device_id_for_onboarding_check);
+                                        println!("🚀 Device {} is ready, starting automatic frontload...", device_id_for_onboarding_check);
+                                        
+                                        let device_id_for_frontload = device_id_for_onboarding_check;
+                                        let app_for_frontload = app_for_onboarding_check;
+                                        
                                         println!("🔄 Starting automatic frontload for device: {}", device_id_for_frontload);
                                         
                                         // Get the cache manager from app state
@@ -870,16 +900,31 @@ async fn log_all_devices_portfolio_summary(cache_manager: &std::sync::Arc<crate:
     
     let mut total_portfolio_value = 0.0;
     let mut device_summaries = Vec::new();
+    let mut all_balances_debug = Vec::new();
     
     for metadata in &all_metadata {
         // Get portfolio balances for this device
         let balances = cache_manager.get_device_portfolio(&metadata.device_id).await.unwrap_or_default();
         
-        // Calculate total USD value for this device
+        // Calculate total USD value for this device and track individual balances
         let mut device_total = 0.0;
+        let mut device_balances_detail = Vec::new();
+        
         for balance in &balances {
             if let Ok(value) = balance.value_usd.parse::<f64>() {
                 device_total += value;
+                
+                // Only log balances with non-zero value
+                if value > 0.0 {
+                    device_balances_detail.push((
+                        balance.ticker.clone().unwrap_or_else(|| "UNKNOWN".to_string()),
+                        balance.balance.clone(),
+                        value,
+                        balance.caip.clone(),
+                        balance.address.clone(),
+                        balance.pubkey.clone(),
+                    ));
+                }
             }
         }
         
@@ -889,6 +934,7 @@ async fn log_all_devices_portfolio_summary(cache_manager: &std::sync::Arc<crate:
         let device_short = &metadata.device_id[metadata.device_id.len().saturating_sub(8)..];
         
         device_summaries.push((device_label.to_string(), device_short.to_string(), device_total, balances.len()));
+        all_balances_debug.push((device_label.to_string(), metadata.device_id.clone(), device_balances_detail));
     }
     
     // Log the summary
@@ -908,6 +954,72 @@ async fn log_all_devices_portfolio_summary(cache_manager: &std::sync::Arc<crate:
     }
     
     println!("📊 ===============================================");
+    
+    // Log detailed balances for debugging
+    println!("\n🔍 DETAILED BALANCE BREAKDOWN:");
+    println!("================================================");
+    for (device_label, device_id, balances) in all_balances_debug {
+        if !balances.is_empty() {
+            println!("\n📱 Device: {} ({})", device_label, &device_id[device_id.len().saturating_sub(8)..]);
+            println!("   Individual Balances:");
+            
+            // Sort balances by value descending
+            let mut sorted_balances = balances;
+            sorted_balances.sort_by(|a, b| b.2.partial_cmp(&a.2).unwrap_or(std::cmp::Ordering::Equal));
+            
+            for (ticker, balance, value_usd, caip, address, pubkey) in sorted_balances {
+                println!("   - {}: {} = ${:.2} USD", ticker, balance, value_usd);
+                if value_usd > 10.0 {  // Only show details for significant balances
+                    println!("     CAIP: {}", caip);
+                    if let Some(addr) = address {
+                        println!("     Address: {}", addr);
+                    }
+                    println!("     Pubkey: {}", pubkey);
+                }
+            }
+        }
+    }
+    println!("================================================");
+    
+    // Check for potential duplicates
+    let mut balance_map: std::collections::HashMap<String, Vec<(String, f64)>> = std::collections::HashMap::new();
+    
+    for metadata in &all_metadata {
+        let balances = cache_manager.get_device_portfolio(&metadata.device_id).await.unwrap_or_default();
+        
+        for balance in &balances {
+            if let Ok(value) = balance.value_usd.parse::<f64>() {
+                if value > 0.0 {
+                    let key = format!("{}-{}-{}", 
+                        balance.caip,
+                        balance.address.as_deref().unwrap_or("no-address"),
+                        balance.balance
+                    );
+                    balance_map.entry(key).or_insert_with(Vec::new).push((metadata.device_id.clone(), value));
+                }
+            }
+        }
+    }
+    
+    // Log any duplicates found
+    let mut found_duplicates = false;
+    for (key, entries) in balance_map.iter() {
+        if entries.len() > 1 {
+            if !found_duplicates {
+                println!("\n⚠️  POTENTIAL DUPLICATE BALANCES DETECTED:");
+                println!("================================================");
+                found_duplicates = true;
+            }
+            println!("   Balance key: {}", key);
+            for (device_id, value) in entries {
+                println!("     - Device {}: ${:.2}", &device_id[device_id.len().saturating_sub(8)..], value);
+            }
+        }
+    }
+    
+    if !found_duplicates {
+        println!("\n✅ No duplicate balances detected");
+    }
     
     Ok(())
 }

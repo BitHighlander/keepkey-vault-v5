@@ -440,9 +440,38 @@ pub async fn get_all_devices_portfolio(
     for metadata in &all_metadata {
         match cache.get_device_portfolio(&metadata.device_id).await {
             Ok(balances) => {
-                let device_total: f64 = balances.iter()
-                    .filter_map(|b| b.value_usd.parse::<f64>().ok())
-                    .sum();
+                // Debug logging to track duplicates
+                log::info!("🔍 Processing device {} ({} balances)", 
+                    &metadata.device_id[metadata.device_id.len().saturating_sub(8)..], 
+                    balances.len()
+                );
+                
+                let mut device_total = 0.0;
+                let mut balance_details = Vec::new();
+                
+                for balance in &balances {
+                    if let Ok(value) = balance.value_usd.parse::<f64>() {
+                        if value > 0.0 {
+                            device_total += value;
+                            balance_details.push((
+                                balance.ticker.clone().unwrap_or_else(|| "UNKNOWN".to_string()),
+                                balance.balance.clone(),
+                                value,
+                                balance.caip.clone(),
+                            ));
+                        }
+                    }
+                }
+                
+                // Log top balances for this device
+                balance_details.sort_by(|a, b| b.2.partial_cmp(&a.2).unwrap_or(std::cmp::Ordering::Equal));
+                log::info!("  💰 Device total: ${:.2} USD", device_total);
+                for (i, (ticker, balance, value, caip)) in balance_details.iter().take(5).enumerate() {
+                    log::info!("    {}. {}: {} = ${:.2} USD ({})", i+1, ticker, balance, value, caip);
+                }
+                if balance_details.len() > 5 {
+                    log::info!("    ... and {} more balances", balance_details.len() - 5);
+                }
                 
                 total_value_usd += device_total;
                 

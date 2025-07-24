@@ -27,6 +27,40 @@ impl CacheManager {
             "balance"
         };
         
+        // Check if this exact balance already exists (to prevent duplicates)
+        let exists: bool = db.query_row(
+            "SELECT EXISTS(
+                SELECT 1 FROM portfolio_balances 
+                WHERE device_id = ?1 
+                AND pubkey = ?2 
+                AND caip = ?3 
+                AND COALESCE(address, '') = COALESCE(?4, '')
+                AND type = ?5
+                AND balance = ?6
+                AND balance_usd = ?7
+                LIMIT 1
+            )",
+            params![
+                device_id,
+                final_pubkey,
+                balance.caip,
+                balance.address,
+                balance_type,
+                balance.balance,
+                balance.value_usd,
+            ],
+            |row| row.get(0)
+        ).unwrap_or(false);
+        
+        if exists {
+            log::debug!("⏭️ Skipping duplicate portfolio balance for {} - {} ({})", 
+                balance.ticker.as_ref().unwrap_or(&"UNKNOWN".to_string()),
+                balance.caip,
+                balance.balance
+            );
+            return Ok(());
+        }
+        
         db.execute(
             "INSERT OR REPLACE INTO portfolio_balances 
              (device_id, caip, ticker, balance, balance_usd, price_usd, network_id, 
@@ -90,6 +124,75 @@ impl CacheManager {
         ).ok()
     }
 
+    /// Clean up duplicate portfolio balances
+    pub async fn clean_duplicate_portfolio_balances(&self) -> Result<usize> {
+        let db = self.db.lock().await;
+        
+        // First, identify and log duplicates
+        let duplicates: Vec<(String, String, String, String, String, String, String)> = db
+            .prepare(
+                "SELECT device_id, pubkey, caip, COALESCE(address, '') as addr, type, balance, balance_usd
+                 FROM portfolio_balances
+                 GROUP BY device_id, pubkey, caip, addr, type, balance, balance_usd
+                 HAVING COUNT(*) > 1"
+            )?
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, String>(4)?,
+                    row.get::<_, String>(5)?,
+                    row.get::<_, String>(6)?,
+                ))
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        
+        if duplicates.is_empty() {
+            log::info!("✅ No duplicate portfolio balances found");
+            return Ok(0);
+        }
+        
+        log::warn!("⚠️ Found {} duplicate portfolio balance entries, cleaning up...", duplicates.len());
+        
+        // Delete duplicates, keeping only one of each
+        let mut total_deleted = 0;
+        for (device_id, pubkey, caip, address, balance_type, balance, balance_usd) in duplicates {
+            // Delete all but the most recent one
+            let deleted = db.execute(
+                "DELETE FROM portfolio_balances 
+                 WHERE device_id = ?1 
+                 AND pubkey = ?2 
+                 AND caip = ?3 
+                 AND COALESCE(address, '') = ?4
+                 AND type = ?5
+                 AND balance = ?6
+                 AND balance_usd = ?7
+                 AND id NOT IN (
+                     SELECT MAX(id) 
+                     FROM portfolio_balances 
+                     WHERE device_id = ?1 
+                     AND pubkey = ?2 
+                     AND caip = ?3 
+                     AND COALESCE(address, '') = ?4
+                     AND type = ?5
+                     AND balance = ?6
+                     AND balance_usd = ?7
+                 )",
+                params![device_id, pubkey, caip, address, balance_type, balance, balance_usd],
+            )?;
+            
+            if deleted > 0 {
+                log::debug!("🧹 Deleted {} duplicate entries for {} - {}", deleted, caip, balance);
+                total_deleted += deleted;
+            }
+        }
+        
+        log::info!("✅ Cleaned up {} duplicate portfolio balance entries", total_deleted);
+        Ok(total_deleted)
+    }
+    
     /// Convert network ID to coin name for pubkey lookup
     fn network_id_to_coin_name(&self, network_id: &str) -> &str {
         match network_id {

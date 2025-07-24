@@ -86,7 +86,7 @@ function App() {
         const [onboardingActive, setOnboardingActive] = useState(false);
         const { showOnboarding, showError } = useCommonDialogs();
         const { shouldShowOnboarding, loading: onboardingLoading, clearCache } = useOnboardingState();
-        const { hideAll, activeDialog, getQueue } = useDialog();
+        const { hideAll, hide, activeDialog, getQueue } = useDialog();
         
         // Debug log active dialogs
         useEffect(() => {
@@ -97,28 +97,36 @@ function App() {
             }
         }, [activeDialog, getQueue]);
         
-        // Clear any stuck dialogs when showing VaultInterface
+        // Clear any stuck dialogs when showing VaultInterface (but not onboarding-related dialogs)
         useEffect(() => {
             console.log('📱 [App] Dialog cleanup effect triggered with:', {
                 loadingStatus,
                 deviceConnected,
                 deviceUpdateComplete,
+                shouldShowOnboarding,
+                onboardingActive,
                 expectedLoadingStatus: "Device ready",
                 statusMatches: loadingStatus === "Device ready",
                 allConditionsMet: loadingStatus === "Device ready" && deviceConnected && deviceUpdateComplete
             });
             
-            if (loadingStatus === "Device ready" && deviceConnected && deviceUpdateComplete) {
+            if (loadingStatus === "Device ready" && deviceConnected && deviceUpdateComplete && !shouldShowOnboarding && !onboardingActive) {
                 const queue = getQueue();
-                console.log('📱 [App] All conditions met! Dialog queue length:', queue.length);
+                console.log('📱 [App] All conditions met and no onboarding needed! Dialog queue length:', queue.length);
                 if (queue.length > 0) {
-                    console.warn('📱 [App] Clearing stuck dialogs before showing VaultInterface:', queue.map(d => d.id));
-                    hideAll();
+                    // Only clear non-onboarding dialogs
+                    const nonOnboardingDialogs = queue.filter(d => !d.id.includes('onboarding'));
+                                         if (nonOnboardingDialogs.length > 0) {
+                         console.warn('📱 [App] Clearing stuck non-onboarding dialogs:', nonOnboardingDialogs.map(d => d.id));
+                         nonOnboardingDialogs.forEach(d => hide(d.id));
+                     } else {
+                         console.log('📱 [App] Only onboarding dialogs in queue, not clearing');
+                     }
                 } else {
                     console.log('📱 [App] No stuck dialogs to clear');
                 }
             }
-        }, [loadingStatus, deviceConnected, deviceUpdateComplete, getQueue, hideAll]);
+        }, [loadingStatus, deviceConnected, deviceUpdateComplete, shouldShowOnboarding, onboardingActive, getQueue, hide]);
         
         // Function to show device access error dialog
         const showDeviceAccessError = (errorMessage: string) => {
@@ -166,38 +174,31 @@ function App() {
             }
         };
 
-        // Check onboarding status on startup
+        // Onboarding is now handled via backend events (device:onboarding-required)
+        // Just track the state for UI logic
         useEffect(() => {
             if (onboardingLoading) {
                 console.log("App.tsx: Onboarding state still loading...");
                 return;
             }
 
-            console.log(`App.tsx: Should show onboarding: ${shouldShowOnboarding}`);
+            console.log(`App.tsx: Onboarding check - should show: ${shouldShowOnboarding}`);
             
             if (shouldShowOnboarding) {
-                console.log("App.tsx: Showing onboarding wizard");
+                console.log("App.tsx: Onboarding will be handled by backend events when device is ready");
                 setOnboardingActive(true);
-                // Add a small delay to ensure the dialog system is ready
-                setTimeout(() => {
-                    showOnboarding({
-                        onComplete: () => {
-                            console.log("App.tsx: Onboarding completed callback");
-                            clearCache(); // Clear the cache after completion
-                            setOnboardingActive(false);
-                        }
-                    });
-                }, 1000);
             } else {
                 console.log("App.tsx: Onboarding not needed, user is already onboarded");
+                setOnboardingActive(false);
             }
-        }, [shouldShowOnboarding, onboardingLoading, showOnboarding, clearCache]);
+        }, [shouldShowOnboarding, onboardingLoading, clearCache]);
 
         useEffect(() => {
             let unlistenStatusUpdate: (() => void) | undefined;
             let unlistenDeviceReady: (() => void) | undefined;
             let unlistenServerReady: (() => void) | undefined;
             let unlistenServerError: (() => void) | undefined;
+            let unlistenOnboardingRequired: (() => void) | undefined;
 
             const setupEventListeners = async () => {
                 try {
@@ -331,6 +332,20 @@ function App() {
                         }
                     });
 
+                    // Listen for onboarding required events
+                    console.log('🎯 Setting up device:onboarding-required listener...');
+                    unlistenOnboardingRequired = await listen('device:onboarding-required', (event) => {
+                        console.log('📱 [App] Received device:onboarding-required event:', event.payload);
+                        setOnboardingActive(true);
+                        showOnboarding({
+                            onComplete: () => {
+                                console.log("App.tsx: Onboarding completed callback");
+                                clearCache(); // Clear the cache after completion
+                                setOnboardingActive(false);
+                            }
+                        });
+                    });
+
                     console.log('✅ All event listeners set up successfully');
                     
                     // Return cleanup function that removes all listeners
@@ -343,6 +358,7 @@ function App() {
                         if (unlistenDeviceDisconnected) unlistenDeviceDisconnected();
                         if (unlistenServerReady) unlistenServerReady();
                         if (unlistenServerError) unlistenServerError();
+                        if (unlistenOnboardingRequired) unlistenOnboardingRequired();
                     };
                     
                 } catch (error) {
@@ -357,6 +373,7 @@ function App() {
                 if (unlistenDeviceReady) unlistenDeviceReady();
                 if (unlistenServerReady) unlistenServerReady();
                 if (unlistenServerError) unlistenServerError();
+                if (unlistenOnboardingRequired) unlistenOnboardingRequired();
             };
         }, []); // Empty dependency array ensures this runs once on mount and cleans up on unmount
 
@@ -388,19 +405,27 @@ function App() {
           }
         }, [deviceUpdateComplete, loadingStatus, deviceConnected]);
 
-        // Show the main vault interface ONLY when device is ready, updates are complete, AND server is ready
+        // CRITICAL: Only show VaultInterface when BOTH device is ready AND onboarding is complete
+        // Onboarding has absolute priority over everything else
         console.log('📱 [App] Checking if should show VaultInterface:', {
             loadingStatus,
             deviceConnected,
             deviceUpdateComplete,
             serverReady,
             serverError,
-            shouldShow: loadingStatus === "Device ready" && deviceConnected && deviceUpdateComplete // TEMP: Removed server check
+            shouldShowOnboarding,
+            onboardingActive,
+            deviceReady: loadingStatus === "Device ready" && deviceConnected && deviceUpdateComplete,
+            onboardingComplete: !shouldShowOnboarding && !onboardingActive
         });
         
-        if (loadingStatus === "Device ready" && deviceConnected && deviceUpdateComplete) { // TEMP: Removed server check
-            console.log('📱 [App] ✅ All conditions met (device ready) - showing VaultInterface! (server check temporarily disabled)');
+        // Show VaultInterface when device is ready, even if onboarding is needed (dialog will overlay)
+        if (loadingStatus === "Device ready" && deviceConnected && deviceUpdateComplete) {
+            console.log('📱 [App] ✅ Device ready - showing VaultInterface! (onboarding dialog will overlay if needed)');
             return <VaultInterface />;
+        } else if (shouldShowOnboarding || onboardingActive) {
+            console.log('📱 [App] ⏳ Onboarding needed but device not ready yet - showing loading UI');
+            // Continue with normal loading UI until device is ready
         }
 
         // Show splash screen while connecting

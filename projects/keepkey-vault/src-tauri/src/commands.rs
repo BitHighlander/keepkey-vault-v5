@@ -1993,9 +1993,13 @@ pub async fn is_onboarded() -> Result<bool, String> {
     Ok(is_onboarded)
 }
 
-/// Mark onboarding as completed
+/// Mark onboarding as completed and trigger frontload for ready devices
 #[tauri::command]
-pub async fn set_onboarding_completed() -> Result<(), String> {
+pub async fn set_onboarding_completed(
+    cache_manager: tauri::State<'_, Arc<once_cell::sync::OnceCell<Arc<crate::cache::CacheManager>>>>,
+    queue_manager: tauri::State<'_, DeviceQueueManager>,
+    app: tauri::AppHandle,
+) -> Result<(), String> {
     let mut config = load_config()?;
     
     if let Some(obj) = config.as_object_mut() {
@@ -2003,7 +2007,49 @@ pub async fn set_onboarding_completed() -> Result<(), String> {
     }
     
     save_config(&config)?;
-    println!("Onboarding marked as completed");
+    println!("✅ Onboarding marked as completed");
+    
+    // Now that onboarding is complete, trigger frontload for any ready devices
+    let connected_devices = get_connected_devices().await.unwrap_or_default();
+    for device in connected_devices {
+        if let Some(device_id) = device.get("device_id").and_then(|v| v.as_str()) {
+            println!("🚀 Onboarding complete - triggering frontload for device: {}", device_id);
+            
+            // Trigger frontload in the background
+            let device_id_clone = device_id.to_string();
+            let cache_manager_clone = cache_manager.inner().clone();
+            let queue_manager_clone = queue_manager.inner().clone();
+            let app_clone = app.clone();
+            
+            tauri::async_runtime::spawn(async move {
+                match get_cache_manager(&cache_manager_clone).await {
+                    Ok(cache) => {
+                        let frontload_controller = crate::cache::FrontloadController::new(
+                            cache.clone(),
+                            queue_manager_clone,
+                        );
+                        
+                        if let Err(e) = frontload_controller.frontload_device(&device_id_clone).await {
+                            println!("⚠️ Post-onboarding frontload failed for device {}: {}", device_id_clone, e);
+                        } else {
+                            println!("✅ Post-onboarding frontload completed for device: {}", device_id_clone);
+                            
+                            // Emit completion event
+                            let _ = app_clone.emit("cache:frontload-completed", serde_json::json!({
+                                "device_id": device_id_clone,
+                                "success": true,
+                                "post_onboarding": true
+                            }));
+                        }
+                    }
+                    Err(e) => {
+                        println!("❌ Failed to get cache manager for post-onboarding frontload: {}", e);
+                    }
+                }
+            });
+        }
+    }
+    
     Ok(())
 }
 

@@ -142,10 +142,31 @@ impl FrontloadController {
             log::debug!("🔄 Processing cached path {}/{}: {} ({})", 
                 i + 1, total_paths, cached_path.path_id, cached_path.blockchain);
             
-            // Skip if already cached (check cache first)
-            let derivation_path = self.address_n_list_to_string(&cached_path.address_n_list);
-            if self.is_already_cached(device_id, &derivation_path, &cached_path.blockchain, cached_path.script_type.as_deref().unwrap_or("")).await? {
-                log::debug!("⏭️ Skipping already cached path: {}", cached_path.path_id);
+            // Check if we need to skip based on what we'll actually request
+            let mut skip_entirely = false;
+            
+            // For Bitcoin-like coins, check both account and master paths
+            if matches!(cached_path.blockchain.as_str(), "bitcoin" | "bitcoincash" | "litecoin" | "dogecoin" | "dash") {
+                let account_path = self.address_n_list_to_string(&cached_path.address_n_list);
+                let master_path = self.address_n_list_to_string(&cached_path.address_n_list_master);
+                
+                let account_cached = self.is_already_cached(device_id, &account_path, &cached_path.blockchain, cached_path.script_type.as_deref().unwrap_or("")).await?;
+                let master_cached = self.is_already_cached(device_id, &master_path, &cached_path.blockchain, cached_path.script_type.as_deref().unwrap_or("")).await?;
+                
+                if account_cached && master_cached {
+                    log::debug!("⏭️ Skipping already cached Bitcoin-like path: {} (both account and master cached)", cached_path.path_id);
+                    skip_entirely = true;
+                }
+            } else {
+                // For other coins, only check master path since that's what we'll request
+                let master_path = self.address_n_list_to_string(&cached_path.address_n_list_master);
+                if self.is_already_cached(device_id, &master_path, &cached_path.blockchain, cached_path.script_type.as_deref().unwrap_or("")).await? {
+                    log::debug!("⏭️ Skipping already cached path: {} (master)", cached_path.path_id);
+                    skip_entirely = true;
+                }
+            }
+            
+            if skip_entirely {
                 continue;
             }
             
@@ -173,6 +194,18 @@ impl FrontloadController {
         match self.frontload_portfolio_data(device_id).await {
             Ok(portfolio_count) => {
                 log::info!("✅ Cached portfolio data for {} assets", portfolio_count);
+                
+                // Clean up any duplicate portfolio balances
+                match self.cache.clean_duplicate_portfolio_balances().await {
+                    Ok(cleaned) => {
+                        if cleaned > 0 {
+                            log::info!("🧹 Cleaned {} duplicate portfolio balances", cleaned);
+                        }
+                    }
+                    Err(e) => {
+                        log::warn!("⚠️ Failed to clean duplicate portfolio balances: {}", e);
+                    }
+                }
             }
             Err(e) => {
                 log::warn!("⚠️ Failed to fetch portfolio data: {}", e);
@@ -286,16 +319,17 @@ impl FrontloadController {
         
         // For Bitcoin-like coins, get both XPUB (account level) and addresses (master level)
         if matches!(cached_path.blockchain.as_str(), "bitcoin" | "bitcoincash" | "litecoin" | "dogecoin" | "dash") {
-            // 1. Get XPUB at account level (m/44'/0'/0')
-            let xpub_request = DeviceRequest::GetPublicKey {
-                path: account_path_str.clone(),
-                coin_name: Some(cached_path.blockchain.clone()),
-                script_type: cached_path.script_type.clone(),
-                ecdsa_curve_name: Some(cached_path.curve.clone()),
-                show_display: Some(cached_path.show_display),
-            };
-            
-            match self.send_device_request(queue_handle, xpub_request).await {
+            // 1. Get XPUB at account level (m/44'/0'/0') - but check cache first
+            if !self.is_already_cached(device_id, &account_path_str, &cached_path.blockchain, cached_path.script_type.as_deref().unwrap_or("")).await? {
+                let xpub_request = DeviceRequest::GetPublicKey {
+                    path: account_path_str.clone(),
+                    coin_name: Some(cached_path.blockchain.clone()),
+                    script_type: cached_path.script_type.clone(),
+                    ecdsa_curve_name: Some(cached_path.curve.clone()),
+                    show_display: Some(cached_path.show_display),
+                };
+                
+                match self.send_device_request(queue_handle, xpub_request).await {
                 Ok(response) => {
                     if let Some(cached) = super::types::CachedPubkey::from_device_response(
                         device_id,
@@ -312,20 +346,25 @@ impl FrontloadController {
                         }
                     }
                 }
-                Err(e) => {
-                    log::debug!("Failed to get XPUB for {}: {}", cached_path.path_id, e);
+                    Err(e) => {
+                        log::debug!("Failed to get XPUB for {}: {}", cached_path.path_id, e);
+                    }
                 }
+            } else {
+                log::debug!("⏭️ XPUB already cached for {}: {}", cached_path.path_id, account_path_str);
+                count += 1;
             }
             
-            // 2. Get address at master level (m/44'/0'/0'/0/0)
-            let address_request = DeviceRequest::GetAddress {
-                path: master_path_str.clone(),
-                coin_name: cached_path.blockchain.clone(),
-                script_type: cached_path.script_type.clone(),
-                show_display: Some(cached_path.show_display),
-            };
-            
-            match self.send_device_request(queue_handle, address_request).await {
+            // 2. Get address at master level (m/44'/0'/0'/0/0) - but check cache first
+            if !self.is_already_cached(device_id, &master_path_str, &cached_path.blockchain, cached_path.script_type.as_deref().unwrap_or("")).await? {
+                let address_request = DeviceRequest::GetAddress {
+                    path: master_path_str.clone(),
+                    coin_name: cached_path.blockchain.clone(),
+                    script_type: cached_path.script_type.clone(),
+                    show_display: Some(cached_path.show_display),
+                };
+                
+                match self.send_device_request(queue_handle, address_request).await {
                 Ok(response) => {
                     if let Some(cached) = super::types::CachedPubkey::from_device_response(
                         device_id,
@@ -342,9 +381,13 @@ impl FrontloadController {
                         }
                     }
                 }
-                Err(e) => {
-                    log::debug!("Failed to get address for {}: {}", cached_path.path_id, e);
+                    Err(e) => {
+                        log::debug!("Failed to get address for {}: {}", cached_path.path_id, e);
+                    }
                 }
+            } else {
+                log::debug!("⏭️ Address already cached for {}: {}", cached_path.path_id, master_path_str);
+                count += 1;
             }
         } else {
             // For other blockchains, use appropriate address request
@@ -538,6 +581,8 @@ impl FrontloadController {
         
         // Convert to (pubkey, caip) tuples - use addresses for Cosmos chains, xpubs for others
         let mut result = Vec::new();
+        let mut seen_pubkeys = std::collections::HashSet::new();
+        
         for (coin_name, xpub, address) in pubkey_data {
             let (pubkey, caip) = match coin_name.to_lowercase().as_str() {
                 // Cosmos chains need addresses, not xpubs
@@ -635,6 +680,12 @@ impl FrontloadController {
                     continue;
                 }
             };
+            
+            // Skip if we've already seen this pubkey
+            if !seen_pubkeys.insert(pubkey.clone()) {
+                log::debug!("⏭️ Skipping duplicate pubkey for {}: {}", coin_name, pubkey);
+                continue;
+            }
             
             log::info!("📊 Frontload adding: {} -> {} ({})", coin_name, caip,
                 if coin_name.starts_with("cosmos") || coin_name.ends_with("chain") { "address" } else { "xpub" });

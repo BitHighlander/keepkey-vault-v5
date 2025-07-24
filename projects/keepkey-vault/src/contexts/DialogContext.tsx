@@ -61,13 +61,7 @@ export function DialogProvider({ children }: { children: React.ReactNode }) {
       return null;
     }
     
-    // First check if there's a PIN dialog - it always has highest priority
-    const pinDialog = queue.find(d => d.id.includes('pin-unlock'));
-    if (pinDialog) {
-      return pinDialog;
-    }
-    
-    // Sort by priority (highest first)
+    // Sort by priority (highest first) - this handles all dialogs including PIN correctly
     const sorted = [...queue].sort((a, b) => {
       const priorityA = PRIORITY_ORDER[a.priority || 'normal'];
       const priorityB = PRIORITY_ORDER[b.priority || 'normal'];
@@ -83,9 +77,6 @@ export function DialogProvider({ children }: { children: React.ReactNode }) {
     console.log(`🎯 [DialogContext] Current queue before:`, state.queue.map(d => d.id));
     console.log(`🎯 [DialogContext] Current active before:`, state.active?.id);
     
-    // Special handling for PIN dialog - it should always take priority when device is ready
-    const isPinDialog = config.id.includes('pin-unlock');
-    
     // Use startTransition to avoid synchronous suspense issues with lazy components
     startTransition(() => {
       setState((prevState) => {
@@ -96,19 +87,16 @@ export function DialogProvider({ children }: { children: React.ReactNode }) {
           return prevState;
         }
         
-        // If this is a critical dialog or PIN dialog, remove lower priority dialogs
+        // If this is a critical dialog, remove lower priority dialogs
         let newQueue = [...prevState.queue];
-        if (config.priority === 'critical' || isPinDialog) {
-          // Remove non-critical dialogs except for PIN dialogs
+        if (config.priority === 'critical') {
+          // Remove non-critical dialogs
           newQueue = newQueue.filter(d => {
             const dialogPriority = PRIORITY_ORDER[d.priority || 'normal'];
             const configPriority = PRIORITY_ORDER[config.priority || 'normal'];
-            const isDialogPin = d.id.includes('pin-unlock');
             
-            // Keep dialog if:
-            // 1. It's a PIN dialog (PIN dialogs are always kept)
-            // 2. It has equal or higher priority than the new dialog
-            return isDialogPin || dialogPriority >= configPriority;
+            // Keep dialog if it has equal or higher priority than the new dialog
+            return dialogPriority >= configPriority;
           });
           
           // Call onClose for removed dialogs
@@ -123,14 +111,8 @@ export function DialogProvider({ children }: { children: React.ReactNode }) {
         // Add the new dialog
         newQueue.push(config);
         
-        // Process queue with special PIN handling
-        let newActive = processQueue(newQueue);
-        
-        // If a PIN dialog is in the queue and device is ready, it should always be active
-        const pinDialog = newQueue.find(d => d.id.includes('pin-unlock'));
-        if (pinDialog && (isPinDialog || !prevState.active?.id.includes('pin-unlock'))) {
-          newActive = pinDialog;
-        }
+        // Process queue using priority system
+        const newActive = processQueue(newQueue);
         
         console.log(`🎯 [DialogContext] New queue:`, newQueue.map(d => d.id));
         console.log(`🎯 [DialogContext] New active:`, newActive?.id);
@@ -277,6 +259,20 @@ export function DialogProvider({ children }: { children: React.ReactNode }) {
       {/* Render active dialog */}
       {state.active && (() => {
         console.log('🎭 [DialogContext] Rendering active dialog:', state.active.id, 'Component:', state.active.component);
+        
+        // Calculate z-index based on priority, not hardcoded IDs
+        const priority = state.active.priority || 'normal';
+        const basezIndex = 9000;
+        const priorityBonus = PRIORITY_ORDER[priority] * 1000;
+        const finalzIndex = basezIndex + priorityBonus;
+        
+        console.log('🎭 [DialogContext] Dialog z-index calculation:', {
+          dialogId: state.active.id,
+          priority,
+          priorityBonus,
+          finalzIndex
+        });
+        
         return (
           <div 
             style={{ 
@@ -285,7 +281,7 @@ export function DialogProvider({ children }: { children: React.ReactNode }) {
               left: 0, 
               right: 0, 
               bottom: 0, 
-              zIndex: state.active.id.includes('pin-unlock') ? 99999 : 9999,
+              zIndex: finalzIndex,
               backgroundColor: 'rgba(0, 0, 0, 0.5)',
               display: 'flex',
               alignItems: 'center',
