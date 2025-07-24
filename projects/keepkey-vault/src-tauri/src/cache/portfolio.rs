@@ -27,17 +27,29 @@ impl CacheManager {
             "balance"
         };
         
-        // Check if this exact balance already exists (to prevent duplicates)
+        // Create a unique balance key to prevent logical duplicates
+        let balance_key = format!("{}:{}:{}:{}:{}", 
+            balance.caip,
+            balance.address.as_deref().unwrap_or("no-address"),
+            balance.balance,
+            balance_type,
+            balance.ticker.as_deref().unwrap_or("UNKNOWN")
+        );
+        
+        // Enhanced duplicate detection - check both exact matches and logical duplicates
         let exists: bool = db.query_row(
             "SELECT EXISTS(
                 SELECT 1 FROM portfolio_balances 
                 WHERE device_id = ?1 
-                AND pubkey = ?2 
-                AND caip = ?3 
-                AND COALESCE(address, '') = COALESCE(?4, '')
-                AND type = ?5
-                AND balance = ?6
-                AND balance_usd = ?7
+                AND (
+                    -- Exact duplicate check
+                    (pubkey = ?2 AND caip = ?3 AND COALESCE(address, '') = COALESCE(?4, '') 
+                     AND type = ?5 AND balance = ?6 AND ABS(COALESCE(balance_usd, 0) - COALESCE(?7, 0)) < 0.01)
+                    OR
+                    -- Logical duplicate check (same asset/balance for device regardless of pubkey)
+                    (device_id = ?1 AND caip = ?3 AND COALESCE(address, '') = COALESCE(?4, '') 
+                     AND type = ?5 AND balance = ?6 AND ticker = ?8)
+                )
                 LIMIT 1
             )",
             params![
@@ -47,17 +59,14 @@ impl CacheManager {
                 balance.address,
                 balance_type,
                 balance.balance,
-                balance.value_usd,
+                balance.value_usd.parse::<f64>().unwrap_or(0.0),
+                balance.ticker.as_ref().unwrap_or(&"UNKNOWN".to_string()),
             ],
             |row| row.get(0)
         ).unwrap_or(false);
         
         if exists {
-            log::debug!("⏭️ Skipping duplicate portfolio balance for {} - {} ({})", 
-                balance.ticker.as_ref().unwrap_or(&"UNKNOWN".to_string()),
-                balance.caip,
-                balance.balance
-            );
+            log::debug!("⏭️ Skipping duplicate balance: {}", balance_key);
             return Ok(());
         }
         

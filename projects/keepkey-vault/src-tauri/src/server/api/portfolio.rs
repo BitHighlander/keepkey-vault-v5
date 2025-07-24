@@ -155,7 +155,7 @@ pub async fn get_combined_portfolio(
     
     // Check if we should force refresh
     let force_refresh = params.refresh.unwrap_or(false);
-    let ttl_minutes = params.ttl.unwrap_or(10);
+    let _ttl_minutes = params.ttl.unwrap_or(10);
     
     // For combined portfolio, check if any device needs refresh
     let needs_refresh = if force_refresh {
@@ -412,7 +412,7 @@ pub async fn get_portfolio_history(
 )]
 pub async fn get_all_devices_portfolio(
     State(state): State<Arc<ServerState>>,
-    Query(params): Query<PortfolioQuery>,
+    Query(_params): Query<PortfolioQuery>,
 ) -> Result<Json<AllDevicesPortfolioResponse>, StatusCode> {
     let cache = state.cache_manager.get()
         .ok_or(StatusCode::INTERNAL_SERVER_ERROR)?;
@@ -672,7 +672,7 @@ fn trigger_background_refresh(
 
 /// Refresh portfolio for a device
 async fn refresh_device_portfolio(
-    state: &Arc<ServerState>,
+    _state: &Arc<ServerState>,
     cache: &Arc<crate::cache::CacheManager>,
     device_id: &str,
 ) -> Result<(), anyhow::Error> {

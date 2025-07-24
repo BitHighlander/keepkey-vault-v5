@@ -11,7 +11,7 @@ pub async fn process_transaction_request(
         // Bitcoin/UTXO signing
         DeviceRequest::SignTransaction { coin: _, inputs, outputs, version: _, lock_time: _ } => {
             // Convert our internal types to keepkey-rust types
-            let kk_inputs: Vec<keepkey_rust::messages::TxInputType> = inputs.iter().map(|input| {
+            let _kk_inputs: Vec<keepkey_rust::messages::TxInputType> = inputs.iter().map(|input| {
                 keepkey_rust::messages::TxInputType {
                     address_n: input.address_n_list.clone(),
                     prev_hash: hex::decode(&input.txid).unwrap_or_default(),
@@ -32,7 +32,7 @@ pub async fn process_transaction_request(
                 }
             }).collect();
             
-            let kk_outputs: Vec<keepkey_rust::messages::TxOutputType> = outputs.iter().map(|output| {
+            let _kk_outputs: Vec<keepkey_rust::messages::TxOutputType> = outputs.iter().map(|output| {
                 keepkey_rust::messages::TxOutputType {
                     address: if output.is_change.unwrap_or(false) {
                         None
@@ -75,7 +75,7 @@ pub async fn process_transaction_request(
         // Ethereum signing
         DeviceRequest::EthereumSignTransaction { 
             nonce, gas_price, gas_limit, to, value, data, 
-            chain_id, max_fee_per_gas, max_priority_fee_per_gas, access_list 
+            chain_id, max_fee_per_gas, max_priority_fee_per_gas, access_list: _ 
         } => {
             let mut eth_tx = keepkey_rust::messages::EthereumSignTx::default();
             
@@ -135,7 +135,7 @@ pub async fn process_transaction_request(
             
             // Send the Ethereum sign transaction message
             match queue_handle.send_raw(eth_tx.into(), false).await {
-                Ok(keepkey_rust::messages::Message::EthereumTxRequest(tx_req)) => {
+                Ok(keepkey_rust::messages::Message::EthereumTxRequest(_tx_req)) => {
                     // Handle the multi-step transaction signing protocol
                     // For now, return a placeholder response
                     DeviceResponse::EthereumSignedTransaction {

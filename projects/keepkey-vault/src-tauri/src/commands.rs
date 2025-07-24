@@ -34,6 +34,8 @@ type LastResponsesMap = Arc<tokio::sync::Mutex<std::collections::HashMap<String,
 // Add frontend readiness state and queued events
 lazy_static::lazy_static! {
     static ref FRONTEND_READY_STATE: Arc<tokio::sync::RwLock<FrontendReadyState>> = Arc::new(tokio::sync::RwLock::new(FrontendReadyState::default()));
+    // One-time initialization flag to prevent duplicate ready signals
+    static ref FRONTEND_READY_ONCE: Arc<tokio::sync::Mutex<bool>> = Arc::new(tokio::sync::Mutex::new(false));
 }
 
 #[derive(Debug, Clone)]
@@ -1826,25 +1828,36 @@ pub async fn test_status_emission(app: tauri::AppHandle) -> Result<String, Strin
 /// Signal that the frontend is ready to receive events
 #[tauri::command]
 pub async fn frontend_ready(app: AppHandle) -> Result<(), String> {
-    println!("🎯 Frontend ready signal received - enabling event emission");
+    // Check if we've already processed the ready signal
+    let mut already_ready = FRONTEND_READY_ONCE.lock().await;
+    
+    if *already_ready {
+        log::debug!("🎯 Frontend ready signal already processed, ignoring duplicate call");
+        return Ok(());
+    }
+    
+    *already_ready = true;
+    drop(already_ready); // Release lock before processing
+    
+    log::info!("🎯 Frontend ready signal received - enabling event emission");
     
     let mut state = FRONTEND_READY_STATE.write().await;
     state.is_ready = true;
     
     // Flush any queued events
     if !state.queued_events.is_empty() {
-        println!("📦 Flushing {} queued events to frontend", state.queued_events.len());
+        log::info!("📦 Flushing {} queued events to frontend", state.queued_events.len());
         
         for event in state.queued_events.drain(..) {
-            println!("📡 Sending queued event: {} (queued at: {})", event.event_name, event.timestamp);
+            log::debug!("📡 Sending queued event: {} (queued at: {})", event.event_name, event.timestamp);
             if let Err(e) = app.emit(&event.event_name, &event.payload) {
-                println!("❌ Failed to emit queued event {}: {}", event.event_name, e);
+                log::error!("❌ Failed to emit queued event {}: {}", event.event_name, e);
             }
         }
         
-        println!("✅ All queued events have been sent to frontend");
+        log::info!("✅ All queued events have been sent to frontend");
     } else {
-        println!("✅ No queued events to flush");
+        log::debug!("✅ No queued events to flush");
     }
     
     Ok(())

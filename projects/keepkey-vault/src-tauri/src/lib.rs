@@ -251,6 +251,27 @@ pub fn run() {
                 }
             });
             
+            // Start request cache cleanup task
+            tauri::async_runtime::spawn(async move {
+                let mut interval = tokio::time::interval(std::time::Duration::from_secs(300)); // 5 minutes
+                loop {
+                    interval.tick().await;
+                    
+                    // Clean up old cached requests (older than 5 minutes)
+                    {
+                        let mut cache = device::queue::REQUEST_CACHE.lock().await;
+                        let cutoff = std::time::Instant::now() - std::time::Duration::from_secs(300);
+                        cache.retain(|key, (_, timestamp)| {
+                            let keep = *timestamp > cutoff;
+                            if !keep {
+                                log::debug!("🧹 Cleaning up cached request: {}", key);
+                            }
+                            keep
+                        });
+                    }
+                }
+            });
+            
             // Start REST/MCP server in background (ALWAYS ENABLED - no preference check)
             let server_handle = app.handle().clone();
             let server_queue_manager = device_queue_manager.clone();

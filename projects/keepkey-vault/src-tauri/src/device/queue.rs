@@ -2,6 +2,7 @@ use tauri::{State, AppHandle, Emitter};
 use std::sync::Arc;
 use std::collections::HashMap;
 use tokio::sync::RwLock;
+use uuid;
 
 
 // Import types needed for DeviceRequestWrapper
@@ -13,11 +14,72 @@ lazy_static::lazy_static! {
     static ref DEVICE_STATE_CACHE: Arc<RwLock<HashMap<String, DeviceStateCache>>> = Arc::new(RwLock::new(HashMap::new()));
 }
 
+// Add request deduplication system
+lazy_static::lazy_static! {
+    /// Tracks pending requests to prevent duplicate device calls
+    static ref PENDING_REQUESTS: Arc<tokio::sync::Mutex<HashMap<String, Arc<tokio::sync::Notify>>>> = 
+        Arc::new(tokio::sync::Mutex::new(HashMap::new()));
+    
+    /// Caches recent request responses for deduplication (with timestamps)
+    pub static ref REQUEST_CACHE: Arc<tokio::sync::Mutex<HashMap<String, (DeviceResponse, std::time::Instant)>>> = 
+        Arc::new(tokio::sync::Mutex::new(HashMap::new()));
+}
+
 #[derive(Debug, Clone)]
 struct DeviceStateCache {
     is_oob_bootloader: bool,
     last_features: Option<keepkey_rust::messages::Features>,
     last_update: std::time::Instant,
+}
+
+/// Generate a unique key for request deduplication
+fn generate_request_key(device_id: &str, request: &DeviceRequest) -> String {
+    match request {
+        // Address generation requests - deduplicate based on path and display settings
+        DeviceRequest::EthereumGetAddress { path, show_display } => {
+            format!("{}:eth_addr:{}:{}", device_id, path, show_display.unwrap_or(false))
+        }
+        DeviceRequest::GetXpub { path } => {
+            format!("{}:xpub:{}", device_id, path)
+        }
+        DeviceRequest::GetAddress { path, coin_name, script_type, show_display } => {
+            format!("{}:addr:{}:{}:{}:{}", 
+                device_id, path, coin_name, 
+                script_type.as_deref().unwrap_or("default"),
+                show_display.unwrap_or(false)
+            )
+        }
+        DeviceRequest::CosmosGetAddress { path, hrp, show_display } => {
+            format!("{}:cosmos_addr:{}:{}:{}", device_id, path, hrp, show_display.unwrap_or(false))
+        }
+        DeviceRequest::ThorchainGetAddress { path, testnet, show_display } => {
+            format!("{}:thor_addr:{}:{}:{}", device_id, path, testnet, show_display.unwrap_or(false))
+        }
+        DeviceRequest::MayachainGetAddress { path, show_display } => {
+            format!("{}:maya_addr:{}:{}", device_id, path, show_display.unwrap_or(false))
+        }
+        DeviceRequest::OsmosisGetAddress { path, show_display } => {
+            format!("{}:osmo_addr:{}:{}", device_id, path, show_display.unwrap_or(false))
+        }
+        DeviceRequest::XrpGetAddress { path, show_display } => {
+            format!("{}:xrp_addr:{}:{}", device_id, path, show_display.unwrap_or(false))
+        }
+        DeviceRequest::GetPublicKey { path, coin_name, script_type, ecdsa_curve_name, show_display } => {
+            format!("{}:pubkey:{}:{}:{}:{}:{}", 
+                device_id, path, 
+                coin_name.as_deref().unwrap_or("default"),
+                script_type.as_deref().unwrap_or("default"),
+                ecdsa_curve_name.as_deref().unwrap_or("default"),
+                show_display.unwrap_or(false)
+            )
+        }
+        // Feature requests can be deduplicated
+        DeviceRequest::GetFeatures => {
+            format!("{}:features", device_id)
+        }
+        // Other requests should not be deduplicated (transactions, device management, etc.)
+        _ => format!("{}:unique:{}", device_id, uuid::Uuid::new_v4())
+    }
 }
 
 #[tauri::command]
@@ -28,9 +90,56 @@ pub async fn add_to_device_queue(
     cache_manager: State<'_, Arc<once_cell::sync::OnceCell<Arc<CacheManager>>>>,
     app: AppHandle,
 ) -> Result<String, String> {
-    println!("Adding to device queue: {:?}", request);
+    // Generate deduplication key
+    let request_key = generate_request_key(&request.device_id, &request.request);
+    let cache_duration = std::time::Duration::from_secs(300); // 5 minute cache
     
-    // Log the incoming request
+    // Check if we have a recent cached response
+    {
+        let mut cache = REQUEST_CACHE.lock().await;
+        if let Some((cached_response, timestamp)) = cache.get(&request_key) {
+            if timestamp.elapsed() < cache_duration {
+                log::debug!("✅ Using cached response for: {}", request_key);
+                
+                // Store response and return immediately
+                let mut responses = last_responses.lock().await;
+                responses.insert(request.request_id.clone(), cached_response.clone());
+                return Ok(request.request_id);
+            } else {
+                // Remove stale cache entry
+                cache.remove(&request_key);
+            }
+        }
+    }
+    
+    // Check if identical request is already pending
+    {
+        let mut pending = PENDING_REQUESTS.lock().await;
+        if let Some(notify) = pending.get(&request_key) {
+            log::debug!("⏳ Request already pending, waiting: {}", request_key);
+            
+            // Wait for the pending request to complete
+            let notify_clone = notify.clone();
+            drop(pending); // Release lock before waiting
+            notify_clone.notified().await;
+            
+            // Check if we now have a cached result
+            let cache = REQUEST_CACHE.lock().await;
+            if let Some((cached_response, _)) = cache.get(&request_key) {
+                log::debug!("✅ Got result from pending request: {}", request_key);
+                
+                // Store response and return
+                let mut responses = last_responses.lock().await;
+                responses.insert(request.request_id.clone(), cached_response.clone());
+                return Ok(request.request_id);
+            }
+        } else {
+            // Register this request as pending
+            pending.insert(request_key.clone(), Arc::new(tokio::sync::Notify::new()));
+        }
+    }
+    
+    // Log the incoming request (condensed)
     let request_data = serde_json::json!({
         "request": request.request,
         "device_id": request.device_id,
@@ -993,8 +1102,24 @@ pub async fn add_to_device_queue(
     // Store the response for queue status queries
     {
         let mut responses = last_responses.lock().await;
-        println!("🗄️ Inserting DeviceResponse into last_responses: device_id={}, request_id={}", request.device_id, request.request_id);
+        log::debug!("🗄️ Storing response: device_id={}, request_id={}", request.device_id, request.request_id);
         responses.insert(request.request_id.clone(), device_response.clone());
+    }
+    
+    // Cache successful responses for deduplication
+    if result.is_ok() {
+        let mut cache = REQUEST_CACHE.lock().await;
+        cache.insert(request_key.clone(), (device_response.clone(), std::time::Instant::now()));
+        log::debug!("💾 Cached response for key: {}", request_key);
+    }
+    
+    // Clean up pending request and notify waiters
+    {
+        let mut pending = PENDING_REQUESTS.lock().await;
+        if let Some(notify) = pending.remove(&request_key) {
+            notify.notify_waiters();
+            log::debug!("📢 Notified waiters for key: {}", request_key);
+        }
     }
     
     // Emit event to frontend with the response
@@ -1004,19 +1129,16 @@ pub async fn add_to_device_queue(
         "response": device_response
     });
     
-    // EXPLICIT LOGGING FOR SIGNING EVENTS
+    // Log signing events
     if let DeviceResponse::SignedTransaction { ref signed_tx, .. } = device_response {
-        println!("🚀 Emitting SignedTransaction event to frontend!");
-        println!("    device_id: {}", request.device_id);
-        println!("    request_id: {}", request.request_id);
-        println!("    signed_tx length: {}", signed_tx.len());
-        println!("    event_payload: {}", serde_json::to_string_pretty(&event_payload).unwrap_or_else(|_| "failed to serialize".to_string()));
+        log::debug!("🚀 Emitting SignedTransaction: device_id={}, request_id={}, tx_len={}", 
+            request.device_id, request.request_id, signed_tx.len());
     }
     
     if let Err(e) = app.emit("device:response", &event_payload) {
-        eprintln!("Failed to emit device:response event: {}", e);
+        log::error!("Failed to emit device:response event: {}", e);
     } else {
-        println!("📡 Emitted device:response event for request {}", request.request_id);
+        log::debug!("📡 Emitted device:response for request {}", request.request_id);
     }
     
     // Log the response

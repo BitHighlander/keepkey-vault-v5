@@ -558,15 +558,18 @@ impl FrontloadController {
     async fn collect_device_xpubs(&self, device_id: &str) -> Result<Vec<(String, String)>> {
         let db = self.cache.db.lock().await;
         
-        // Query both xpubs and addresses from cached_pubkeys, similar to portfolio refresh
+        // Query both xpubs and addresses from cached_pubkeys with proper deduplication
         let mut stmt = db.prepare("
             SELECT DISTINCT 
                 coin_name,
                 xpub,
-                address
+                address,
+                path
             FROM cached_pubkeys 
             WHERE device_id = ?1 
             AND (xpub IS NOT NULL OR address IS NOT NULL)
+            GROUP BY coin_name, COALESCE(xpub, address)
+            ORDER BY updated_at DESC
         ")?;
         
         let rows = stmt.query_map([device_id], |row| {
@@ -574,6 +577,7 @@ impl FrontloadController {
                 row.get::<_, String>(0)?,  // coin_name
                 row.get::<_, Option<String>>(1)?,  // xpub
                 row.get::<_, Option<String>>(2)?,  // address
+                row.get::<_, String>(3)?,  // path
             ))
         })?;
         
@@ -583,14 +587,14 @@ impl FrontloadController {
         let mut result = Vec::new();
         let mut seen_pubkeys = std::collections::HashSet::new();
         
-        for (coin_name, xpub, address) in pubkey_data {
+        for (coin_name, xpub, address, _path) in pubkey_data {
             let (pubkey, caip) = match coin_name.to_lowercase().as_str() {
                 // Cosmos chains need addresses, not xpubs
                 "cosmos" => {
                     if let Some(addr) = address {
                         (addr, "cosmos:cosmoshub-4/slip44:118".to_string())
                     } else {
-                        log::warn!("⚠️ No address found for cosmos pubkey, skipping");
+                        log::debug!("No address for cosmos");
                         continue;
                     }
                 },
@@ -598,7 +602,7 @@ impl FrontloadController {
                     if let Some(addr) = address {
                         (addr, "cosmos:osmosis-1/slip44:118".to_string())
                     } else {
-                        log::warn!("⚠️ No address found for osmosis pubkey, skipping");
+                        log::debug!("No address for osmosis");
                         continue;
                     }
                 },
@@ -606,7 +610,7 @@ impl FrontloadController {
                     if let Some(addr) = address {
                         (addr, "cosmos:thorchain-mainnet-v1/slip44:931".to_string())
                     } else {
-                        log::warn!("⚠️ No address found for thorchain pubkey, skipping");
+                        log::debug!("No address for thorchain");
                         continue;
                     }
                 },
@@ -614,7 +618,7 @@ impl FrontloadController {
                     if let Some(addr) = address {
                         (addr, "cosmos:mayachain-mainnet-v1/slip44:931".to_string())
                     } else {
-                        log::warn!("⚠️ No address found for mayachain pubkey, skipping");
+                        log::debug!("No address for mayachain");
                         continue;
                     }
                 },
@@ -623,7 +627,7 @@ impl FrontloadController {
                     if let Some(xpub_val) = xpub {
                         (xpub_val, "bip122:000000000019d6689c085ae165831e93/slip44:0".to_string())
                     } else {
-                        log::warn!("⚠️ No xpub found for bitcoin pubkey, skipping");
+                        log::debug!("No xpub for bitcoin pubkey");
                         continue;
                     }
                 },
@@ -631,7 +635,7 @@ impl FrontloadController {
                     if let Some(xpub_val) = xpub {
                         (xpub_val, "eip155:1/slip44:60".to_string())
                     } else {
-                        log::warn!("⚠️ No xpub found for ethereum pubkey, skipping");
+                        log::debug!("No xpub for ethereum");
                         continue;
                     }
                 },
@@ -639,7 +643,7 @@ impl FrontloadController {
                     if let Some(xpub_val) = xpub {
                         (xpub_val, "bip122:12a765e31ffd4059bada1e25190f6e98/slip44:2".to_string())
                     } else {
-                        log::warn!("⚠️ No xpub found for litecoin pubkey, skipping");
+                        log::debug!("No xpub for litecoin");
                         continue;
                     }
                 },
@@ -647,7 +651,7 @@ impl FrontloadController {
                     if let Some(xpub_val) = xpub {
                         (xpub_val, "bip122:1a91e3dace36e2be3bf030a65679fe82/slip44:3".to_string())
                     } else {
-                        log::warn!("⚠️ No xpub found for dogecoin pubkey, skipping");
+                        log::debug!("No xpub for dogecoin");
                         continue;
                     }
                 },
@@ -655,7 +659,7 @@ impl FrontloadController {
                     if let Some(xpub_val) = xpub {
                         (xpub_val, "bip122:000000000000000000651ef99cb9fcbe/slip44:145".to_string())
                     } else {
-                        log::warn!("⚠️ No xpub found for bitcoincash pubkey, skipping");
+                        log::debug!("No xpub for bitcoincash");
                         continue;
                     }
                 },
@@ -663,7 +667,7 @@ impl FrontloadController {
                     if let Some(xpub_val) = xpub {
                         (xpub_val, "bip122:00000ffd590b1485b3caadc19b22e637/slip44:5".to_string())
                     } else {
-                        log::warn!("⚠️ No xpub found for dash pubkey, skipping");
+                        log::debug!("No xpub for dash");
                         continue;
                     }
                 },
@@ -671,7 +675,7 @@ impl FrontloadController {
                     if let Some(addr) = address {
                         (addr, "ripple:1/slip44:144".to_string())
                     } else {
-                        log::warn!("⚠️ No address found for ripple pubkey, skipping");
+                        log::debug!("No address for ripple");
                         continue;
                     }
                 },
@@ -687,8 +691,7 @@ impl FrontloadController {
                 continue;
             }
             
-            log::info!("📊 Frontload adding: {} -> {} ({})", coin_name, caip,
-                if coin_name.starts_with("cosmos") || coin_name.ends_with("chain") { "address" } else { "xpub" });
+            log::debug!("📊 Adding: {} -> {}", coin_name, caip);
             
             result.push((pubkey, caip));
         }

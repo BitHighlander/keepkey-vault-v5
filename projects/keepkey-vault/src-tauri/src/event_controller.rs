@@ -101,7 +101,7 @@ impl EventController {
                         
                         // Get current devices using high-level API
                         let current_devices = keepkey_rust::features::list_connected_devices();
-                        println!("🔍 DEBUG: Device scan #{} - found {} devices", loop_count, current_devices.len());
+                        log::trace!("Device scan #{} - found {} devices", loop_count, current_devices.len());
                         
                         // Handle device disconnections by checking which devices are no longer present
                         let current_device_ids: std::collections::HashSet<String> = current_devices.iter()

@@ -36,7 +36,7 @@ pub async fn process_address_request(
     }
     
     let result = match request {
-        DeviceRequest::GetAddress { path, coin_name, script_type, show_display } => {
+        DeviceRequest::GetAddress { path: _, coin_name: _, script_type: _, show_display: _ } => {
             // Delegate to system operations for generic GetAddress requests
             return crate::device::system_operations::process_system_request(queue_handle, request, request_id, device_id).await;
         }
