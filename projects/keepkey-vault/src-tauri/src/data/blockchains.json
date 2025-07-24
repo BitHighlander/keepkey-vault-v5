@@ -1,0 +1,346 @@
+{
+  "version": "1.0.0",
+  "description": "KeepKey Vault supported blockchain networks configuration - matches pioneer-sdk integration-coins approach",
+  "generated": "2025-01-24",
+  "source": "Based on integration-coins AllChainsSupported and ChainToNetworkId mapping",
+  "blockchains": [
+    {
+      "id": "ethereum",
+      "name": "Ethereum",
+      "symbol": "ETH",
+      "network_id": "eip155:1",
+      "enabled": true,
+      "type": "evm",
+      "slip44": 60,
+      "derivation_path": "m/44'/60'/0'/0/0",
+      "native_asset": {
+        "caip": "eip155:1/slip44:60",
+        "symbol": "ETH",
+        "decimals": 18
+      },
+      "rpc_urls": ["https://eth.llamarpc.com", "https://ethereum.publicnode.com"],
+      "explorer_url": "https://etherscan.io",
+      "supports_tokens": true,
+      "supports_eip1559": true
+    },
+    {
+      "id": "base",
+      "name": "Base",
+      "symbol": "ETH",
+      "network_id": "eip155:8453",
+      "enabled": true,
+      "type": "evm",
+      "slip44": 60,
+      "derivation_path": "m/44'/60'/0'/0/0",
+      "native_asset": {
+        "caip": "eip155:8453/slip44:60",
+        "symbol": "ETH",
+        "decimals": 18
+      },
+      "rpc_urls": ["https://mainnet.base.org", "https://base.publicnode.com"],
+      "explorer_url": "https://basescan.org",
+      "supports_tokens": true,
+      "supports_eip1559": true
+    },
+    {
+      "id": "arbitrum",
+      "name": "Arbitrum One",
+      "symbol": "ETH",
+      "network_id": "eip155:42161",
+      "enabled": true,
+      "type": "evm",
+      "slip44": 60,
+      "derivation_path": "m/44'/60'/0'/0/0",
+      "native_asset": {
+        "caip": "eip155:42161/slip44:60",
+        "symbol": "ETH",
+        "decimals": 18
+      },
+      "rpc_urls": ["https://arb1.arbitrum.io/rpc", "https://arbitrum.publicnode.com"],
+      "explorer_url": "https://arbiscan.io",
+      "supports_tokens": true,
+      "supports_eip1559": true
+    },
+    {
+      "id": "optimism",
+      "name": "Optimism",
+      "symbol": "ETH",
+      "network_id": "eip155:10",
+      "enabled": true,
+      "type": "evm",
+      "slip44": 60,
+      "derivation_path": "m/44'/60'/0'/0/0",
+      "native_asset": {
+        "caip": "eip155:10/slip44:60",
+        "symbol": "ETH",
+        "decimals": 18
+      },
+      "rpc_urls": ["https://mainnet.optimism.io", "https://optimism.publicnode.com"],
+      "explorer_url": "https://optimistic.etherscan.io",
+      "supports_tokens": true,
+      "supports_eip1559": true
+    },
+    {
+      "id": "polygon",
+      "name": "Polygon",
+      "symbol": "MATIC",
+      "network_id": "eip155:137",
+      "enabled": true,
+      "type": "evm",
+      "slip44": 60,
+      "derivation_path": "m/44'/60'/0'/0/0",
+      "native_asset": {
+        "caip": "eip155:137/slip44:60",
+        "symbol": "MATIC",
+        "decimals": 18
+      },
+      "rpc_urls": ["https://polygon-rpc.com", "https://polygon.publicnode.com"],
+      "explorer_url": "https://polygonscan.com",
+      "supports_tokens": true,
+      "supports_eip1559": true
+    },
+    {
+      "id": "avalanche",
+      "name": "Avalanche C-Chain",
+      "symbol": "AVAX",
+      "network_id": "eip155:43114",
+      "enabled": true,
+      "type": "evm",
+      "slip44": 60,
+      "derivation_path": "m/44'/60'/0'/0/0",
+      "native_asset": {
+        "caip": "eip155:43114/slip44:60",
+        "symbol": "AVAX",
+        "decimals": 18
+      },
+      "rpc_urls": ["https://api.avax.network/ext/bc/C/rpc", "https://avalanche.publicnode.com"],
+      "explorer_url": "https://snowtrace.io",
+      "supports_tokens": true,
+      "supports_eip1559": true
+    },
+    {
+      "id": "bsc",
+      "name": "BNB Smart Chain",
+      "symbol": "BNB",
+      "network_id": "eip155:56",
+      "enabled": true,
+      "type": "evm",
+      "slip44": 60,
+      "derivation_path": "m/44'/60'/0'/0/0",
+      "native_asset": {
+        "caip": "eip155:56/slip44:60",
+        "symbol": "BNB",
+        "decimals": 18
+      },
+      "rpc_urls": ["https://bsc-dataseed1.binance.org", "https://bsc.publicnode.com"],
+      "explorer_url": "https://bscscan.com",
+      "supports_tokens": true,
+      "supports_eip1559": false
+    },
+    {
+      "id": "bitcoin",
+      "name": "Bitcoin",
+      "symbol": "BTC",
+      "network_id": "bip122:000000000019d6689c085ae165831e93",
+      "enabled": true,
+      "type": "utxo",
+      "slip44": 0,
+      "derivation_path": "m/84'/0'/0'/0/0",
+      "native_asset": {
+        "caip": "bip122:000000000019d6689c085ae165831e93/slip44:0",
+        "symbol": "BTC",
+        "decimals": 8
+      },
+      "rpc_urls": ["https://blockstream.info/api"],
+      "explorer_url": "https://blockstream.info",
+      "supports_tokens": false,
+      "supports_rbf": true
+    },
+    {
+      "id": "bitcoincash",
+      "name": "Bitcoin Cash",
+      "symbol": "BCH",
+      "network_id": "bip122:000000000000000000651ef99cb9fcbe",
+      "enabled": true,
+      "type": "utxo",
+      "slip44": 145,
+      "derivation_path": "m/44'/145'/0'/0/0",
+      "native_asset": {
+        "caip": "bip122:000000000000000000651ef99cb9fcbe/slip44:145",
+        "symbol": "BCH",
+        "decimals": 8
+      },
+      "rpc_urls": ["https://blockdozer.com/api"],
+      "explorer_url": "https://blockdozer.com",
+      "supports_tokens": false,
+      "supports_rbf": false
+    },
+    {
+      "id": "litecoin",
+      "name": "Litecoin",
+      "symbol": "LTC",
+      "network_id": "bip122:12a765e31ffd4059bada1e25190f6e98",
+      "enabled": true,
+      "type": "utxo",
+      "slip44": 2,
+      "derivation_path": "m/84'/2'/0'/0/0",
+      "native_asset": {
+        "caip": "bip122:12a765e31ffd4059bada1e25190f6e98/slip44:2",
+        "symbol": "LTC",
+        "decimals": 8
+      },
+      "rpc_urls": ["https://blockstream.info/litecoin/api"],
+      "explorer_url": "https://blockstream.info/litecoin",
+      "supports_tokens": false,
+      "supports_rbf": true
+    },
+    {
+      "id": "dogecoin",
+      "name": "Dogecoin",
+      "symbol": "DOGE",
+      "network_id": "bip122:00000000001a91e3dace36e2be3bf030",
+      "enabled": true,
+      "type": "utxo",
+      "slip44": 3,
+      "derivation_path": "m/44'/3'/0'/0/0",
+      "native_asset": {
+        "caip": "bip122:00000000001a91e3dace36e2be3bf030/slip44:3",
+        "symbol": "DOGE",
+        "decimals": 8
+      },
+      "rpc_urls": ["https://dogechain.info/api"],
+      "explorer_url": "https://dogechain.info",
+      "supports_tokens": false,
+      "supports_rbf": false
+    },
+    {
+      "id": "dash",
+      "name": "Dash",
+      "symbol": "DASH",
+      "network_id": "bip122:000007d91d1254d60e2dd1ae58038307",
+      "enabled": true,
+      "type": "utxo",
+      "slip44": 5,
+      "derivation_path": "m/44'/5'/0'/0/0",
+      "native_asset": {
+        "caip": "bip122:000007d91d1254d60e2dd1ae58038307/slip44:5",
+        "symbol": "DASH",
+        "decimals": 8
+      },
+      "rpc_urls": ["https://blockbook.dash.org/api"],
+      "explorer_url": "https://blockbook.dash.org",
+      "supports_tokens": false,
+      "supports_rbf": false
+    },
+    {
+      "id": "cosmos",
+      "name": "Cosmos Hub",
+      "symbol": "ATOM",
+      "network_id": "cosmos:cosmoshub-4",
+      "enabled": true,
+      "type": "cosmos",
+      "slip44": 118,
+      "derivation_path": "m/44'/118'/0'/0/0",
+      "native_asset": {
+        "caip": "cosmos:cosmoshub-4/slip44:118",
+        "symbol": "ATOM",
+        "decimals": 6
+      },
+      "rpc_urls": ["https://cosmos-rpc.publicnode.com", "https://rpc-cosmoshub.keplr.app"],
+      "explorer_url": "https://www.mintscan.io/cosmos",
+      "supports_tokens": true,
+      "supports_staking": true
+    },
+    {
+      "id": "osmosis",
+      "name": "Osmosis",
+      "symbol": "OSMO",
+      "network_id": "cosmos:osmosis-1",
+      "enabled": true,
+      "type": "cosmos",
+      "slip44": 118,
+      "derivation_path": "m/44'/118'/0'/0/0",
+      "native_asset": {
+        "caip": "cosmos:osmosis-1/slip44:118",
+        "symbol": "OSMO",
+        "decimals": 6
+      },
+      "rpc_urls": ["https://osmosis-rpc.publicnode.com", "https://rpc-osmosis.keplr.app"],
+      "explorer_url": "https://www.mintscan.io/osmosis",
+      "supports_tokens": true,
+      "supports_staking": true
+    },
+    {
+      "id": "thorchain",
+      "name": "THORChain",
+      "symbol": "RUNE",
+      "network_id": "cosmos:thorchain-mainnet-v1",
+      "enabled": true,
+      "type": "cosmos",
+      "slip44": 931,
+      "derivation_path": "m/44'/931'/0'/0/0",
+      "native_asset": {
+        "caip": "cosmos:thorchain-mainnet-v1/slip44:931",
+        "symbol": "RUNE",
+        "decimals": 8
+      },
+      "rpc_urls": ["https://rpc.thorchain.info", "https://thornode.ninerealms.com"],
+      "explorer_url": "https://runescan.io",
+      "supports_tokens": false,
+      "supports_staking": true
+    },
+    {
+      "id": "mayachain",
+      "name": "Maya Protocol",
+      "symbol": "CACAO",
+      "network_id": "cosmos:mayachain-mainnet-v1",
+      "enabled": true,
+      "type": "cosmos",
+      "slip44": 931,
+      "derivation_path": "m/44'/931'/0'/0/0",
+      "native_asset": {
+        "caip": "cosmos:mayachain-mainnet-v1/slip44:931",
+        "symbol": "CACAO",
+        "decimals": 10
+      },
+      "rpc_urls": ["https://mayanode.mayachain.info", "https://tendermint.mayachain.info"],
+      "explorer_url": "https://www.mayascan.org",
+      "supports_tokens": false,
+      "supports_staking": true
+    },
+    {
+      "id": "ripple",
+      "name": "XRP Ledger",
+      "symbol": "XRP",
+      "network_id": "ripple:4109c6f2045fc7eff4cde8f9905d19c2",
+      "enabled": true,
+      "type": "ripple",
+      "slip44": 144,
+      "derivation_path": "m/44'/144'/0'/0/0",
+      "native_asset": {
+        "caip": "ripple:4109c6f2045fc7eff4cde8f9905d19c2/slip44:144",
+        "symbol": "XRP",
+        "decimals": 6
+      },
+      "rpc_urls": ["https://xrplcluster.com", "https://s1.ripple.com:51234"],
+      "explorer_url": "https://xrpscan.com",
+      "supports_tokens": true,
+      "supports_memo": true
+    }
+  ],
+  "metadata": {
+    "total_blockchains": 17,
+    "evm_chains": 7,
+    "utxo_chains": 5,
+    "cosmos_chains": 4,
+    "other_chains": 1,
+    "enabled_by_default": 17
+  },
+  "notes": [
+    "This configuration matches the AllChainsSupported array from integration-coins",
+    "All EVM chains use the same derivation path (m/44'/60'/0'/0/0) but different network IDs",
+    "Each blockchain has its native asset CAIP identifier for balance fetching",
+    "Enabled blockchains will be used for portfolio balance queries during frontload",
+    "Chart data will be fetched for assets with non-zero balances"
+  ]
+} 

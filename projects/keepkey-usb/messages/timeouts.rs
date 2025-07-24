@@ -4,7 +4,7 @@ use core::time::Duration;
 const TIMEOUT: Duration = Duration::from_millis(5000); // Increased for better device compatibility
 const LONG_TIMEOUT: Duration = Duration::from_millis(5 * 60 * 1000);
 const LEGACY_DEVICE_TIMEOUT: Duration = Duration::from_millis(10000); // 10 seconds for older devices
-const QUICK_TIMEOUT: Duration = Duration::from_millis(5000); // 5 seconds for device communication (was causing timeouts)
+const QUICK_TIMEOUT: Duration = Duration::from_millis(15000); // 15 seconds for device communication (increased for frontload)
 
 // Thread-local storage to track if we're communicating with an older device
 thread_local! {

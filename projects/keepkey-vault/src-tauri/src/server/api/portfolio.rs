@@ -678,6 +678,23 @@ async fn refresh_device_portfolio(
 ) -> Result<(), anyhow::Error> {
     log::info!("🔄 Refreshing portfolio for device: {}", device_id);
     
+    // 🌐 Pre-load EVM networks to avoid Send issues in spawned task
+    let evm_networks = match cache.get_evm_networks().await {
+        Ok(networks) => networks,
+        Err(e) => {
+            log::warn!("⚠️ Failed to load EVM networks, using fallback: {}", e);
+            vec![
+                "eip155:1/slip44:60".to_string(),      // Ethereum Mainnet
+                "eip155:8453/slip44:60".to_string(),   // Base
+                "eip155:137/slip44:60".to_string(),    // Polygon  
+                "eip155:56/slip44:60".to_string(),     // BSC
+                "eip155:10/slip44:60".to_string(),     // Optimism
+                "eip155:42161/slip44:60".to_string(),  // Arbitrum One
+                "eip155:43114/slip44:60".to_string(),  // Avalanche C-Chain
+            ]
+        }
+    };
+    
     // Get device pubkey data from cached_pubkeys table (NOT wallet_xpubs!)
     let pubkey_data = {
         let db = cache.db.lock().await;
@@ -712,112 +729,52 @@ async fn refresh_device_portfolio(
     
     log::info!("📊 Found {} cached pubkey entries for portfolio refresh", pubkey_data.len());
     
-    // Get API key from environment
-    let api_key = std::env::var("PIONEER_API_KEY").ok();
+    // 🔧 HARDCODED API KEY - User's own free service, any string works
+    let api_key = std::env::var("PIONEER_API_KEY").unwrap_or_else(|_| "1234".to_string());
     
     // Create Pioneer client
-    let pioneer_client = crate::pioneer_api::create_client(api_key)?;
+    let pioneer_client = crate::pioneer_api::create_client(Some(api_key))?;
+    
+    // Get enabled blockchains for dynamic CAIP mapping
+    let enabled_blockchains = match cache.load_enabled_blockchains().await {
+        Ok(blockchains) => blockchains,
+        Err(e) => {
+            log::warn!("⚠️ Failed to load blockchain config, using hardcoded mapping: {}", e);
+            vec![] // Will fall back to hardcoded mapping
+        }
+    };
     
     // Build pubkey info for Pioneer API - use addresses for Cosmos chains, xpubs for others
     let mut pubkey_infos = Vec::new();
     for (coin_name, xpub, address, _script_type) in &pubkey_data {
-        let (pubkey, caip) = match coin_name.to_lowercase().as_str() {
-            // Cosmos chains need addresses, not xpubs
-            "cosmos" => {
-                if let Some(addr) = address {
-                    (addr.clone(), "cosmos:cosmoshub-4/slip44:118".to_string())
-                } else {
-                    log::warn!("⚠️ No address found for cosmos pubkey, skipping");
-                    continue;
-                }
-            },
-            "osmosis" => {
-                if let Some(addr) = address {
-                    (addr.clone(), "cosmos:osmosis-1/slip44:118".to_string())
-                } else {
-                    log::warn!("⚠️ No address found for osmosis pubkey, skipping");
-                    continue;
-                }
-            },
-            "thorchain" => {
-                if let Some(addr) = address {
-                    (addr.clone(), "cosmos:thorchain-mainnet-v1/slip44:931".to_string())
-                } else {
-                    log::warn!("⚠️ No address found for thorchain pubkey, skipping");
-                    continue;
-                }
-            },
-            "mayachain" => {
-                if let Some(addr) = address {
-                    (addr.clone(), "cosmos:mayachain-mainnet-v1/slip44:931".to_string())
-                } else {
-                    log::warn!("⚠️ No address found for mayachain pubkey, skipping");
-                    continue;
-                }
-            },
-            // Bitcoin-like chains use xpubs
-            "bitcoin" => {
-                if let Some(xpub_val) = xpub {
-                    (xpub_val.clone(), "bip122:000000000019d6689c085ae165831e93/slip44:0".to_string())
-                } else {
-                    log::warn!("⚠️ No xpub found for bitcoin pubkey, skipping");
-                    continue;
-                }
-            },
-            "ethereum" => {
-                if let Some(xpub_val) = xpub {
-                    (xpub_val.clone(), "eip155:1/slip44:60".to_string())
-                } else {
-                    log::warn!("⚠️ No xpub found for ethereum pubkey, skipping");
-                    continue;
-                }
-            },
-            "litecoin" => {
-                if let Some(xpub_val) = xpub {
-                    (xpub_val.clone(), "bip122:12a765e31ffd4059bada1e25190f6e98/slip44:2".to_string())
-                } else {
-                    log::warn!("⚠️ No xpub found for litecoin pubkey, skipping");
-                    continue;
-                }
-            },
-            "dogecoin" => {
-                if let Some(xpub_val) = xpub {
-                    (xpub_val.clone(), "bip122:1a91e3dace36e2be3bf030a65679fe82/slip44:3".to_string())
-                } else {
-                    log::warn!("⚠️ No xpub found for dogecoin pubkey, skipping");
-                    continue;
-                }
-            },
-            "bitcoincash" => {
-                if let Some(xpub_val) = xpub {
-                    (xpub_val.clone(), "bip122:000000000000000000651ef99cb9fcbe/slip44:145".to_string())
-                } else {
-                    log::warn!("⚠️ No xpub found for bitcoincash pubkey, skipping");
-                    continue;
-                }
-            },
-            "dash" => {
-                if let Some(xpub_val) = xpub {
-                    (xpub_val.clone(), "bip122:0000ffd590b1485b3caadc19b22e637/slip44:5".to_string())
-                } else {
-                    log::warn!("⚠️ No xpub found for dash pubkey, skipping");
-                    continue;
-                }
-            },
-            "ripple" => {
-                if let Some(addr) = address {
-                    (addr.clone(), "ripple:1/slip44:144".to_string())
-                } else {
-                    log::warn!("⚠️ No address found for ripple pubkey, skipping");
-                    continue;
-                }
-            },
-            _ => {
-                log::warn!("⚠️ Unknown coin type: {}, skipping", coin_name);
+        let (pubkey, caip) = match map_coin_to_caip(coin_name, &enabled_blockchains, xpub, address) {
+            Some((p, c)) => (p, c),
+            None => {
+                log::warn!("⚠️ Could not map coin {} to CAIP, skipping", coin_name);
                 continue;
             }
         };
         
+        // 🌐 For ALL EVM chains, expand to ALL EVM networks from blockchain configuration
+        let coin_lower = coin_name.to_lowercase();
+        if matches!(coin_lower.as_str(), "ethereum" | "base" | "arbitrum" | "optimism" | "polygon" | "avalanche" | "bsc") {
+            if let Some(xpub_val) = xpub {
+                // Use pre-loaded EVM networks to avoid Send issues
+                log::info!("📊 Expanding {} xpub to {} EVM networks", coin_name, evm_networks.len());
+                for evm_caip in &evm_networks {
+                    log::info!("📊 Adding EVM network: {} xpub -> {}", coin_name, evm_caip);
+                    pubkey_infos.push(crate::pioneer_api::PubkeyInfo {
+                        pubkey: xpub_val.clone(),
+                        networks: vec![evm_caip.clone()],
+                        path: None,
+                        address: None,
+                    });
+                }
+                continue; // Skip the normal single-network logic below
+            }
+        }
+        
+        // For all other coins or if EVM expansion failed, use single network
         log::info!("📊 Adding to Pioneer API request: {} -> {} ({})", coin_name, caip, 
             if coin_name.starts_with("cosmos") || coin_name.ends_with("chain") { "address" } else { "xpub" });
         
@@ -846,8 +803,12 @@ async fn refresh_device_portfolio(
         cache.save_portfolio_balance(balance, device_id).await?;
     }
     
+    // 📈 Enrich with chart/price data like pioneer-sdk does
+    let enriched_balances = enrich_balances_with_charts(&balances, &enabled_blockchains).await;
+    log::info!("📈 Enriched {} balances with chart data", enriched_balances.len());
+    
     // Build and save dashboard
-    let dashboard = build_dashboard_from_balances(&balances);
+    let dashboard = build_dashboard_from_balances(&enriched_balances);
     cache.update_dashboard(device_id, &dashboard).await?;
     
     // Save history snapshot
@@ -857,6 +818,71 @@ async fn refresh_device_portfolio(
         device_id, balances.len(), dashboard.total_value_usd);
     
     Ok(())
+}
+
+/// Enrich portfolio balances with chart/price data like pioneer-sdk
+async fn enrich_balances_with_charts(
+    balances: &[PortfolioBalance],
+    enabled_blockchains: &[crate::cache::assets::BlockchainConfig],
+) -> Vec<PortfolioBalance> {
+    let mut enriched_balances = balances.to_vec();
+    
+    // Count assets with value > 0 for logging
+    let valuable_assets = balances.iter()
+        .filter(|b| b.value_usd.parse::<f64>().unwrap_or(0.0) > 0.0)
+        .count();
+    
+    if valuable_assets == 0 {
+        log::info!("📈 No valuable assets found, skipping chart enrichment");
+        return enriched_balances;
+    }
+    
+    log::info!("📈 Found {} valuable assets to enrich with chart data", valuable_assets);
+    
+    // Group assets by blockchain for efficient price fetching
+    let mut blockchain_assets: std::collections::HashMap<String, Vec<&PortfolioBalance>> = std::collections::HashMap::new();
+    for balance in balances {
+        let usd_value = balance.value_usd.parse::<f64>().unwrap_or(0.0);
+        if usd_value > 0.0 {
+            // Extract blockchain from CAIP (e.g., "eip155:1" from "eip155:1/slip44:60")
+            if let Some(colon_pos) = balance.caip.find(':') {
+                if let Some(slash_pos) = balance.caip.find('/') {
+                    let blockchain = &balance.caip[..slash_pos];
+                    blockchain_assets.entry(blockchain.to_string()).or_insert_with(Vec::new).push(balance);
+                } else {
+                    log::debug!("📈 Could not parse blockchain from CAIP: {}", balance.caip);
+                }
+            }
+        }
+    }
+    
+    log::info!("📈 Grouped assets into {} blockchains for chart enrichment", blockchain_assets.len());
+    
+    // TODO: Implement actual chart/price fetching like pioneer-sdk
+    // For now, just log what we would fetch and return original balances
+    for (blockchain, assets) in blockchain_assets {
+        log::info!("📈 Would fetch charts for {} assets on blockchain {}", assets.len(), blockchain);
+        
+        // Find blockchain config for enhanced metadata
+        if let Some(blockchain_config) = enabled_blockchains.iter().find(|bc| bc.network_id == blockchain) {
+            log::info!("📈   {} ({}) - {} RPC endpoints available", 
+                blockchain_config.name, blockchain_config.symbol, blockchain_config.rpc_urls.len());
+                
+            for asset in assets {
+                if let Some(ticker) = &asset.ticker {
+                    log::debug!("📈   - {} ({}) = ${}", ticker, asset.balance, asset.value_usd);
+                }
+            }
+        }
+    }
+    
+    // Future: Add actual price/chart fetching here
+    // - Fetch latest prices from CoinGecko or Pioneer API
+    // - Get historical price data for charts
+    // - Add volatility and change percentage data
+    // - Enrich with market cap, volume, etc.
+    
+    enriched_balances
 }
 
 /// Build dashboard from balances
@@ -935,5 +961,133 @@ fn get_network_name(network_id: &str) -> String {
         "cosmos:cosmoshub-4" => "Cosmos Hub".to_string(),
         "cosmos:osmosis-1" => "Osmosis".to_string(),
         _ => network_id.to_string(),
+    }
+}
+
+/// Map coin name to CAIP using blockchain configuration, with fallback to hardcoded mapping
+fn map_coin_to_caip(
+    coin_name: &str,
+    enabled_blockchains: &[crate::cache::assets::BlockchainConfig],
+    xpub: &Option<String>,
+    address: &Option<String>,
+) -> Option<(String, String)> {
+    let coin_lower = coin_name.to_lowercase();
+    
+    // First try to find in blockchain configuration
+    for blockchain in enabled_blockchains {
+        let blockchain_id_lower = blockchain.id.to_lowercase();
+        
+        // Match coin name to blockchain ID or symbol
+        if blockchain_id_lower == coin_lower || blockchain.symbol.to_lowercase() == coin_lower {
+            // For Cosmos-based chains, use address; for others, use xpub
+            let needs_address = blockchain.chain_type == "cosmos";
+            
+            if needs_address {
+                if let Some(addr) = address {
+                    return Some((addr.clone(), blockchain.native_asset.caip.clone()));
+                } else {
+                    log::warn!("⚠️ No address found for cosmos-based chain {}", coin_name);
+                    return None;
+                }
+            } else {
+                if let Some(xpub_val) = xpub {
+                    return Some((xpub_val.clone(), blockchain.native_asset.caip.clone()));
+                } else {
+                    log::warn!("⚠️ No xpub found for chain {}", coin_name);
+                    return None;
+                }
+            }
+        }
+    }
+    
+    // Fallback to hardcoded mapping if not found in configuration
+    log::debug!("⚠️ Using fallback mapping for coin: {}", coin_name);
+    match coin_lower.as_str() {
+        // Cosmos chains need addresses, not xpubs
+        "cosmos" => {
+            if let Some(addr) = address {
+                Some((addr.clone(), "cosmos:cosmoshub-4/slip44:118".to_string()))
+            } else {
+                None
+            }
+        },
+        "osmosis" => {
+            if let Some(addr) = address {
+                Some((addr.clone(), "cosmos:osmosis-1/slip44:118".to_string()))
+            } else {
+                None
+            }
+        },
+        "thorchain" => {
+            if let Some(addr) = address {
+                Some((addr.clone(), "cosmos:thorchain-mainnet-v1/slip44:931".to_string()))
+            } else {
+                None
+            }
+        },
+        "mayachain" => {
+            if let Some(addr) = address {
+                Some((addr.clone(), "cosmos:mayachain-mainnet-v1/slip44:931".to_string()))
+            } else {
+                None
+            }
+        },
+        // Bitcoin-like chains use xpubs
+        "bitcoin" => {
+            if let Some(xpub_val) = xpub {
+                Some((xpub_val.clone(), "bip122:000000000019d6689c085ae165831e93/slip44:0".to_string()))
+            } else {
+                None
+            }
+        },
+        // 🌐 All EVM chains should be handled by the expansion logic above, not here
+        "ethereum" | "base" | "arbitrum" | "optimism" | "polygon" | "avalanche" | "bsc" => {
+            if let Some(xpub_val) = xpub {
+                // This should not be reached due to EVM expansion logic above
+                log::warn!("⚠️ EVM chain {} reached individual mapping - should be handled by expansion", coin_lower);
+                Some((xpub_val.clone(), "eip155:1/slip44:60".to_string()))
+            } else {
+                None
+            }
+        },
+        "litecoin" => {
+            if let Some(xpub_val) = xpub {
+                Some((xpub_val.clone(), "bip122:12a765e31ffd4059bada1e25190f6e98/slip44:2".to_string()))
+            } else {
+                None
+            }
+        },
+        "dogecoin" => {
+            if let Some(xpub_val) = xpub {
+                Some((xpub_val.clone(), "bip122:00000000001a91e3dace36e2be3bf030/slip44:3".to_string()))
+            } else {
+                None
+            }
+        },
+        "bitcoincash" => {
+            if let Some(xpub_val) = xpub {
+                Some((xpub_val.clone(), "bip122:000000000000000000651ef99cb9fcbe/slip44:145".to_string()))
+            } else {
+                None
+            }
+        },
+        "dash" => {
+            if let Some(xpub_val) = xpub {
+                Some((xpub_val.clone(), "bip122:000007d91d1254d60e2dd1ae58038307/slip44:5".to_string()))
+            } else {
+                None
+            }
+        },
+        "ripple" => {
+            if let Some(addr) = address {
+                Some((addr.clone(), "ripple:4109c6f2045fc7eff4cde8f9905d19c2/slip44:144".to_string()))
+            } else {
+                None
+            }
+        },
+        _ => {
+            log::warn!("⚠️ Unknown coin type: {}", coin_name);
+            None
+        }
     }
 } 

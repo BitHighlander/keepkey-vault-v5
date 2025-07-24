@@ -42,7 +42,107 @@ pub struct CachedPath {
     pub is_default: bool,
 }
 
+/// Blockchain configuration from blockchains.json
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BlockchainConfig {
+    pub id: String,
+    pub name: String,
+    pub symbol: String,
+    pub network_id: String,
+    pub enabled: bool,
+    #[serde(rename = "type")]
+    pub chain_type: String,
+    pub slip44: u32,
+    pub derivation_path: String,
+    pub native_asset: NativeAsset,
+    pub rpc_urls: Vec<String>,
+    pub explorer_url: String,
+    pub supports_tokens: Option<bool>,
+    pub supports_eip1559: Option<bool>,
+    pub supports_staking: Option<bool>,
+    pub supports_rbf: Option<bool>,
+    pub supports_memo: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NativeAsset {
+    pub caip: String,
+    pub symbol: String,
+    pub decimals: u8,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BlockchainsData {
+    pub version: String,
+    pub description: String,
+    pub blockchains: Vec<BlockchainConfig>,
+    pub metadata: BlockchainMetadata,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BlockchainMetadata {
+    pub total_blockchains: u32,
+    pub evm_chains: u32,
+    pub utxo_chains: u32,
+    pub cosmos_chains: u32,
+    pub other_chains: u32,
+    pub enabled_by_default: u32,
+}
+
 impl CacheManager {
+    /// Load enabled blockchains from blockchains.json configuration
+    pub async fn load_enabled_blockchains(&self) -> Result<Vec<BlockchainConfig>> {
+        log::info!("📋 Loading blockchain configuration from blockchains.json...");
+        
+        let blockchains_json = include_str!("../data/blockchains.json");
+        let blockchains_data: BlockchainsData = serde_json::from_str(blockchains_json)
+            .map_err(|e| anyhow!("Failed to parse blockchains.json: {}", e))?;
+        
+        let enabled_blockchains: Vec<BlockchainConfig> = blockchains_data.blockchains
+            .into_iter()
+            .filter(|bc| bc.enabled)
+            .collect();
+        
+        log::info!("✅ Loaded {} enabled blockchains from configuration", enabled_blockchains.len());
+        
+        // Log the enabled blockchains for debugging
+        for blockchain in &enabled_blockchains {
+            log::info!("  🔗 {} ({}) - {} - enabled", 
+                blockchain.name, blockchain.symbol, blockchain.network_id);
+        }
+        
+        Ok(enabled_blockchains)
+    }
+    
+    /// Get network IDs for enabled blockchains (used for Pioneer API calls)
+    pub async fn get_enabled_network_ids(&self) -> Result<Vec<String>> {
+        let blockchains = self.load_enabled_blockchains().await?;
+        let network_ids: Vec<String> = blockchains.iter()
+            .map(|bc| bc.network_id.clone())
+            .collect();
+        
+        log::info!("📊 Extracted {} network IDs from blockchain configuration", network_ids.len());
+        Ok(network_ids)
+    }
+    
+    /// Get EVM networks from blockchain configuration  
+    pub async fn get_evm_networks(&self) -> Result<Vec<String>> {
+        let blockchains = self.load_enabled_blockchains().await?;
+        let evm_caips: Vec<String> = blockchains.iter()
+            .filter(|bc| bc.chain_type == "evm")
+            .map(|bc| bc.native_asset.caip.clone())
+            .collect();
+        
+        log::info!("📊 Found {} EVM networks in blockchain configuration", evm_caips.len());
+        Ok(evm_caips)
+    }
+    
+    /// Get blockchain configuration by network ID
+    pub async fn get_blockchain_by_network_id(&self, network_id: &str) -> Result<Option<BlockchainConfig>> {
+        let blockchains = self.load_enabled_blockchains().await?;
+        Ok(blockchains.into_iter().find(|bc| bc.network_id == network_id))
+    }
+
     /// Drop and recreate asset-related tables
     pub async fn reset_asset_tables(&self) -> Result<()> {
         let db = self.db.lock().await;
@@ -116,57 +216,70 @@ impl CacheManager {
         
         Ok(())
     }
-    
-    /// Save a cached asset
+
+    /// Save an asset to the cache
     pub async fn save_asset(&self, asset: &CachedAsset) -> Result<()> {
         let db = self.db.lock().await;
         
-        let tags_json = asset.tags.as_ref().map(|t| serde_json::to_string(t).unwrap_or_default());
+        let tags_json = match &asset.tags {
+            Some(tags) => serde_json::to_string(tags).unwrap_or_default(),
+            None => String::new(),
+        };
         
         db.execute(
-            "INSERT OR REPLACE INTO assets 
-             (caip, network_id, chain_id, symbol, name, asset_type, is_native, 
-              contract_address, icon, color, decimals, precision, network_name,
-              explorer, explorer_address_link, explorer_tx_link, coin_gecko_id, tags)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)",
+            "INSERT OR REPLACE INTO assets (
+                caip, network_id, chain_id, symbol, name, asset_type, is_native,
+                contract_address, icon, color, decimals, precision, network_name,
+                explorer, explorer_address_link, explorer_tx_link, coin_gecko_id, tags
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)",
             params![
-                asset.caip,
-                asset.network_id,
-                asset.chain_id,
-                asset.symbol,
-                asset.name,
-                asset.asset_type,
-                asset.is_native,
-                asset.contract_address,
-                asset.icon,
-                asset.color,
-                asset.decimals,
-                asset.precision,
-                asset.network_name,
-                asset.explorer,
-                asset.explorer_address_link,
-                asset.explorer_tx_link,
-                asset.coin_gecko_id,
-                tags_json
+                asset.caip, asset.network_id, asset.chain_id, asset.symbol, asset.name,
+                asset.asset_type, asset.is_native, asset.contract_address, asset.icon,
+                asset.color, asset.decimals, asset.precision, asset.network_name,
+                asset.explorer, asset.explorer_address_link, asset.explorer_tx_link,
+                asset.coin_gecko_id, tags_json
             ],
         )?;
         
         Ok(())
     }
     
-    /// Get asset by CAIP
+    /// Save a derivation path to the cache
+    pub async fn save_path(&self, path: &CachedPath) -> Result<()> {
+        let db = self.db.lock().await;
+        
+        let networks_json = serde_json::to_string(&path.networks)?;
+        let address_n_list_json = serde_json::to_string(&path.address_n_list)?;
+        let address_n_list_master_json = serde_json::to_string(&path.address_n_list_master)?;
+        
+        db.execute(
+            "INSERT OR REPLACE INTO derivation_paths (
+                path_id, note, blockchain, symbol, networks, script_type,
+                address_n_list, address_n_list_master, curve, show_display, is_default
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+            params![
+                path.path_id, path.note, path.blockchain, path.symbol, networks_json,
+                path.script_type, address_n_list_json, address_n_list_master_json,
+                path.curve, path.show_display, path.is_default
+            ],
+        )?;
+        
+        Ok(())
+    }
+    
+    /// Get an asset by CAIP
     pub async fn get_asset(&self, caip: &str) -> Result<Option<CachedAsset>> {
         let db = self.db.lock().await;
         
-        let result = db.query_row(
+        let asset = db.query_row(
             "SELECT caip, network_id, chain_id, symbol, name, asset_type, is_native,
                     contract_address, icon, color, decimals, precision, network_name,
                     explorer, explorer_address_link, explorer_tx_link, coin_gecko_id, tags
              FROM assets WHERE caip = ?1",
-            params![caip],
+            [caip],
             |row| {
                 let tags_json: Option<String> = row.get(17)?;
-                let tags = tags_json.and_then(|t| serde_json::from_str(&t).ok());
+                let tags = tags_json.and_then(|json| serde_json::from_str(&json).ok());
                 
                 Ok(CachedAsset {
                     caip: row.get(0)?,
@@ -191,51 +304,10 @@ impl CacheManager {
             },
         ).optional()?;
         
-        Ok(result)
+        Ok(asset)
     }
     
-    /// Get all assets for a network
-    pub async fn get_network_assets(&self, network_id: &str) -> Result<Vec<CachedAsset>> {
-        let db = self.db.lock().await;
-        
-        let mut stmt = db.prepare(
-            "SELECT caip, network_id, chain_id, symbol, name, asset_type, is_native,
-                    contract_address, icon, color, decimals, precision, network_name,
-                    explorer, explorer_address_link, explorer_tx_link, coin_gecko_id, tags
-             FROM assets WHERE network_id = ?1"
-        )?;
-        
-        let assets = stmt.query_map(params![network_id], |row| {
-            let tags_json: Option<String> = row.get(17)?;
-            let tags = tags_json.and_then(|t| serde_json::from_str(&t).ok());
-            
-            Ok(CachedAsset {
-                caip: row.get(0)?,
-                network_id: row.get(1)?,
-                chain_id: row.get(2)?,
-                symbol: row.get(3)?,
-                name: row.get(4)?,
-                asset_type: row.get(5)?,
-                is_native: row.get(6)?,
-                contract_address: row.get(7)?,
-                icon: row.get(8)?,
-                color: row.get(9)?,
-                decimals: row.get(10)?,
-                precision: row.get(11)?,
-                network_name: row.get(12)?,
-                explorer: row.get(13)?,
-                explorer_address_link: row.get(14)?,
-                explorer_tx_link: row.get(15)?,
-                coin_gecko_id: row.get(16)?,
-                tags,
-            })
-        })?
-        .collect::<Result<Vec<_>, _>>()?;
-        
-        Ok(assets)
-    }
-
-    /// Get all assets for a blockchain (by searching network_id patterns)
+    /// Get assets for a blockchain
     pub async fn get_blockchain_assets(&self, blockchain: &str) -> Result<Vec<CachedAsset>> {
         let db = self.db.lock().await;
         
@@ -265,7 +337,7 @@ impl CacheManager {
         
         let assets = stmt.query_map(params![network_pattern], |row| {
             let tags_json: Option<String> = row.get(17)?;
-            let tags = tags_json.and_then(|t| serde_json::from_str(&t).ok());
+            let tags = tags_json.and_then(|json| serde_json::from_str(&json).ok());
             
             Ok(CachedAsset {
                 caip: row.get(0)?,
@@ -290,49 +362,51 @@ impl CacheManager {
         })?
         .collect::<Result<Vec<_>, _>>()?;
         
-        // For specific blockchains, filter further by symbol or other criteria
-        let filtered_assets = match blockchain {
-            "bitcoin" => assets.into_iter().filter(|a| a.symbol.to_lowercase() == "btc").collect(),
-            "litecoin" => assets.into_iter().filter(|a| a.symbol.to_lowercase() == "ltc").collect(),
-            "dogecoin" => assets.into_iter().filter(|a| a.symbol.to_lowercase() == "doge").collect(),
-            _ => assets,
-        };
-        
-        Ok(filtered_assets)
+        Ok(assets)
     }
     
-    /// Save a derivation path
-    pub async fn save_path(&self, path: &CachedPath) -> Result<()> {
+    /// Get all assets
+    pub async fn get_all_assets(&self) -> Result<Vec<CachedAsset>> {
         let db = self.db.lock().await;
         
-        let networks_json = serde_json::to_string(&path.networks)?;
-        let address_n_list_json = serde_json::to_string(&path.address_n_list)?;
-        let address_n_list_master_json = serde_json::to_string(&path.address_n_list_master)?;
-        
-        db.execute(
-            "INSERT OR REPLACE INTO derivation_paths 
-             (path_id, note, blockchain, symbol, networks, script_type,
-              address_n_list, address_n_list_master, curve, show_display, is_default)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
-            params![
-                path.path_id,
-                path.note,
-                path.blockchain,
-                path.symbol,
-                networks_json,
-                path.script_type,
-                address_n_list_json,
-                address_n_list_master_json,
-                path.curve,
-                path.show_display,
-                path.is_default
-            ],
+        let mut stmt = db.prepare(
+            "SELECT caip, network_id, chain_id, symbol, name, asset_type, is_native,
+                    contract_address, icon, color, decimals, precision, network_name,
+                    explorer, explorer_address_link, explorer_tx_link, coin_gecko_id, tags
+             FROM assets ORDER BY symbol"
         )?;
         
-        Ok(())
+        let assets = stmt.query_map([], |row| {
+            let tags_json: Option<String> = row.get(17)?;
+            let tags = tags_json.and_then(|json| serde_json::from_str(&json).ok());
+            
+            Ok(CachedAsset {
+                caip: row.get(0)?,
+                network_id: row.get(1)?,
+                chain_id: row.get(2)?,
+                symbol: row.get(3)?,
+                name: row.get(4)?,
+                asset_type: row.get(5)?,
+                is_native: row.get(6)?,
+                contract_address: row.get(7)?,
+                icon: row.get(8)?,
+                color: row.get(9)?,
+                decimals: row.get(10)?,
+                precision: row.get(11)?,
+                network_name: row.get(12)?,
+                explorer: row.get(13)?,
+                explorer_address_link: row.get(14)?,
+                explorer_tx_link: row.get(15)?,
+                coin_gecko_id: row.get(16)?,
+                tags,
+            })
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+        
+        Ok(assets)
     }
     
-    /// Get paths for a blockchain
+    /// Get derivation paths for a blockchain
     pub async fn get_blockchain_paths(&self, blockchain: &str) -> Result<Vec<CachedPath>> {
         let db = self.db.lock().await;
         
@@ -377,7 +451,7 @@ impl CacheManager {
         let mut stmt = db.prepare(
             "SELECT path_id, note, blockchain, symbol, networks, script_type,
                     address_n_list, address_n_list_master, curve, show_display, is_default
-             FROM derivation_paths"
+             FROM derivation_paths ORDER BY blockchain, path_id"
         )?;
         
         let paths = stmt.query_map([], |row| {
@@ -408,7 +482,7 @@ impl CacheManager {
         Ok(paths)
     }
     
-    /// Build CAIP from blockchain and path info
+    /// Build CAIP identifier for a path
     pub fn build_caip_for_path(&self, blockchain: &str, network_id: &str) -> String {
         match blockchain {
             "bitcoin" => format!("{}/slip44:0", network_id),

@@ -2,7 +2,7 @@ use tauri::{AppHandle, Emitter, State};
 use std::sync::{Arc, Mutex};
 use serde::{Deserialize, Serialize};
 use keepkey_rust::{
-    device_queue::{DeviceQueueFactory, DeviceQueueHandle},
+    device_queue::DeviceQueueHandle,
     features::DeviceFeatures,
 };
 use uuid;
@@ -19,7 +19,7 @@ use log;
 use crate::device::updates::{update_device_bootloader, update_device_firmware};
 
 // Add timeout constant
-const DEVICE_OPERATION_TIMEOUT_SECS: u64 = 30; // Increased from 5 to 30 seconds
+const DEVICE_OPERATION_TIMEOUT_SECS: u64 = 5; // Reasonable timeout for device operations
 
 // Add device cleanup tracking
 lazy_static::lazy_static! {

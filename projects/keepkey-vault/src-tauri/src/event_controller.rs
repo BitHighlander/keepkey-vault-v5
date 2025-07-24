@@ -243,6 +243,61 @@ impl EventController {
                                 let _ = app_handle.emit("device:connected", device);
                                 println!("🔍 DEBUG: device:connected event emitted");
                                 
+                                // 🚀 TRIGGER FRONTLOAD IMMEDIATELY - Don't wait for features!
+                                let device_id_for_immediate_frontload = device.unique_id.clone();
+                                let app_for_immediate_frontload = app_handle.clone();
+                                
+                                tauri::async_runtime::spawn(async move {
+                                    println!("🚀 IMMEDIATE FRONTLOAD: Triggering frontload on device connect for: {}", device_id_for_immediate_frontload);
+                                    
+                                    // Get the cache manager from app state
+                                    if let Some(cache_state) = app_for_immediate_frontload.try_state::<std::sync::Arc<once_cell::sync::OnceCell<std::sync::Arc<crate::cache::CacheManager>>>>() {
+                                        match crate::commands::get_cache_manager(cache_state.inner()).await {
+                                            Ok(cache_manager) => {
+                                                println!("✅ Cache manager obtained for immediate frontload");
+                                                
+                                                // Get device queue manager from app state
+                                                if let Some(queue_state) = app_for_immediate_frontload.try_state::<crate::commands::DeviceQueueManager>() {
+                                                    println!("✅ Device queue manager obtained for immediate frontload");
+                                                    let device_queue_manager = queue_state.inner().clone();
+                                                    
+                                                    // Create frontload controller
+                                                    let frontload_controller = crate::cache::FrontloadController::new(
+                                                        cache_manager.clone(),
+                                                        device_queue_manager,
+                                                    );
+                                                    
+                                                    println!("🚀 Starting IMMEDIATE frontload for device: {}", device_id_for_immediate_frontload);
+                                                    
+                                                    // Start frontload immediately
+                                                    match frontload_controller.frontload_device(&device_id_for_immediate_frontload).await {
+                                                        Ok(_) => {
+                                                            println!("✅ IMMEDIATE frontload completed successfully for device: {}", device_id_for_immediate_frontload);
+                                                            
+                                                            // Emit frontload completion event
+                                                            let _ = app_for_immediate_frontload.emit("cache:frontload-completed", serde_json::json!({
+                                                                "device_id": device_id_for_immediate_frontload,
+                                                                "success": true,
+                                                                "immediate": true
+                                                            }));
+                                                        }
+                                                        Err(e) => {
+                                                            println!("⚠️ IMMEDIATE frontload failed for device {}: {}", device_id_for_immediate_frontload, e);
+                                                        }
+                                                    }
+                                                } else {
+                                                    println!("❌ Device queue manager not available for immediate frontload");
+                                                }
+                                            }
+                                            Err(e) => {
+                                                println!("❌ Failed to get cache manager for immediate frontload: {}", e);
+                                            }
+                                        }
+                                    } else {
+                                        println!("❌ Cache state not available for immediate frontload");
+                                    }
+                                });
+                                
                                 // Proactively fetch features and emit device:ready when successful
                                 // DIRECT EXECUTION - NO SPAWNING
                                 println!("📡 Fetching device features for: {}", device.unique_id);
@@ -540,27 +595,67 @@ impl EventController {
                                             println!("❌ Failed to get features for {}: {}", device_for_features.unique_id, e);
                                             
                                             // Check for timeout errors specifically
-                                            if e.contains("Timeout while fetching device features") {
-                                                println!("⏱️ Device timeout detected - device may be in invalid state");
-                                                println!("❌ OOPS this should never happen - device communication failed!");
+                                            if e.contains("Timeout while fetching device features") || e.contains("Device operation timed out") {
+                                                println!("⏱️ Device timeout detected - triggering frontload with cached data");
                                                 
-                                                // Log detailed error for debugging
-                                                eprintln!("ERROR: Device timeout indicates invalid state - this should be prevented!");
-                                                eprintln!("Device ID: {}", device_for_features.unique_id);
-                                                eprintln!("Error: {}", e);
+                                                // 🚀 TRIGGER FRONTLOAD ANYWAY - with cached data only
+                                                let device_id_for_frontload = device_for_features.unique_id.clone();
+                                                let app_for_frontload = app_for_features.clone();
                                                 
-                                                // Emit device invalid state event for UI to handle
-                                                let invalid_state_payload = serde_json::json!({
-                                                    "deviceId": device_for_features.unique_id,
-                                                    "error": e,
-                                                    "errorType": "DEVICE_TIMEOUT",
-                                                    "status": "invalid_state"
+                                                tauri::async_runtime::spawn(async move {
+                                                    println!("🔄 Starting cache-only frontload for unresponsive device: {}", device_id_for_frontload);
+                                                    
+                                                    // Get the cache manager from app state
+                                                    if let Some(cache_state) = app_for_frontload.try_state::<std::sync::Arc<once_cell::sync::OnceCell<std::sync::Arc<crate::cache::CacheManager>>>>() {
+                                                        match crate::commands::get_cache_manager(cache_state.inner()).await {
+                                                            Ok(cache_manager) => {
+                                                                println!("✅ Cache manager obtained for cache-only frontload");
+                                                                
+                                                                // Get device queue manager from app state
+                                                                if let Some(queue_state) = app_for_frontload.try_state::<crate::commands::DeviceQueueManager>() {
+                                                                    println!("✅ Device queue manager obtained for cache-only frontload");
+                                                                    let device_queue_manager = queue_state.inner().clone();
+                                                                    
+                                                                    // Create frontload controller
+                                                                    let frontload_controller = crate::cache::FrontloadController::new(
+                                                                        cache_manager.clone(),
+                                                                        device_queue_manager,
+                                                                    );
+                                                                    
+                                                                    println!("🚀 Starting cache-only frontload for unresponsive device: {}", device_id_for_frontload);
+                                                                    
+                                                                    // Start frontload (will work with cached data)
+                                                                    match frontload_controller.frontload_device(&device_id_for_frontload).await {
+                                                                        Ok(_) => {
+                                                                            println!("✅ Cache-only frontload completed for unresponsive device: {}", device_id_for_frontload);
+                                                                            
+                                                                            // Emit frontload completion event
+                                                                            let _ = app_for_frontload.emit("cache:frontload-completed", serde_json::json!({
+                                                                                "device_id": device_id_for_frontload,
+                                                                                "success": true,
+                                                                                "cache_only": true
+                                                                            }));
+                                                                        }
+                                                                        Err(e) => {
+                                                                            println!("⚠️ Cache-only frontload failed for device {}: {}", device_id_for_frontload, e);
+                                                                        }
+                                                                    }
+                                                                } else {
+                                                                    println!("❌ Device queue manager not available for cache-only frontload");
+                                                                }
+                                                            }
+                                                            Err(e) => {
+                                                                println!("❌ Failed to get cache manager for cache-only frontload: {}", e);
+                                                            }
+                                                        }
+                                                    } else {
+                                                        println!("❌ Cache state not available for cache-only frontload");
+                                                    }
                                                 });
-                                                let _ = app_for_features.emit("device:invalid-state", &invalid_state_payload);
                                                 
                                                 // Also emit status update
                                                 let _ = app_for_features.emit("status:update", serde_json::json!({
-                                                    "status": "Device timeout - please reconnect"
+                                                    "status": "Device unresponsive - using cached data"
                                                 }));
                                             }
                                             // Check if this is a device access error

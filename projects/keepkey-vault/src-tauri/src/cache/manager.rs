@@ -455,6 +455,19 @@ impl CacheManager {
         Ok(count as usize)
     }
     
+    /// Count cached pubkeys for a specific device
+    pub async fn get_device_pubkey_count(&self, device_id: &str) -> Result<usize> {
+        let db = self.db.lock().await;
+        
+        let count: i64 = db.query_row(
+            "SELECT COUNT(*) FROM cached_pubkeys WHERE device_id = ?1",
+            params![device_id],
+            |row| row.get(0),
+        )?;
+        
+        Ok(count as usize)
+    }
+    
     /// Count total cached balances across all devices
     pub async fn count_cached_balances(&self) -> Result<usize> {
         let db = self.db.lock().await;

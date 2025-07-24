@@ -521,21 +521,27 @@ pub async fn process_address_request_with_cache(
         _ => None,
     };
     
-    if let Some(addr) = address {
-        if !addr.is_empty() {
-            let cached = CachedPubkey {
-                id: None,
-                device_id: device_id.to_string(),
-                derivation_path: path.to_string(),
-                coin_name: coin_name.to_string(),
-                script_type: script_type.map(|s| s.to_string()),
-                xpub: None,
-                address: Some(addr),
-                chain_code: None,
-                public_key: None,
-                cached_at: chrono::Utc::now().timestamp(),
-                last_used: chrono::Utc::now().timestamp(),
-            };
+            if let Some(addr) = address {
+            if !addr.is_empty() {
+                // 🔥 For EVM chains, always save as "ethereum" to enable expansion
+                let normalized_coin_name = match coin_name.to_lowercase().as_str() {
+                    "base" | "arbitrum" | "optimism" | "polygon" | "avalanche" | "bsc" => "ethereum",
+                    _ => coin_name,
+                };
+                
+                let cached = CachedPubkey {
+                    id: None,
+                    device_id: device_id.to_string(),
+                    derivation_path: path.to_string(),
+                    coin_name: normalized_coin_name.to_string(),
+                    script_type: script_type.map(|s| s.to_string()),
+                    xpub: None,
+                    address: Some(addr),
+                    chain_code: None,
+                    public_key: None,
+                    cached_at: chrono::Utc::now().timestamp(),
+                    last_used: chrono::Utc::now().timestamp(),
+                };
             
             let cache_start = std::time::Instant::now();
             if let Err(e) = cache.save_pubkey(&cached).await {

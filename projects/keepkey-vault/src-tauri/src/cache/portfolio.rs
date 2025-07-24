@@ -18,6 +18,27 @@ impl CacheManager {
         // Use provided pubkey or the one from balance
         let final_pubkey = pubkey.unwrap_or(&balance.pubkey);
         
+        // 🔧 ENRICH TICKER FROM ASSETS TABLE - Fix for UNKNOWN ticker issue
+        let enriched_ticker = if balance.ticker.is_none() || balance.ticker.as_ref().map(|t| t == "UNKNOWN").unwrap_or(false) {
+            // Look up ticker in assets table using CAIP
+            let ticker_lookup: Option<String> = db.query_row(
+                "SELECT symbol FROM assets WHERE caip = ?1",
+                [&balance.caip],
+                |row| row.get(0)
+            ).ok();
+            
+            if let Some(found_ticker) = ticker_lookup {
+                log::info!("✅ Enriched ticker for {}: {} -> {}", balance.caip, 
+                    balance.ticker.as_deref().unwrap_or("None"), found_ticker);
+                Some(found_ticker)
+            } else {
+                log::warn!("⚠️ No asset metadata found for CAIP: {}", balance.caip);
+                balance.ticker.clone()
+            }
+        } else {
+            balance.ticker.clone()
+        };
+        
         // Enhanced balance type detection based on field presence
         let balance_type = if balance.validator.is_some() {
             "delegation"
@@ -33,22 +54,25 @@ impl CacheManager {
             balance.address.as_deref().unwrap_or("no-address"),
             balance.balance,
             balance_type,
-            balance.ticker.as_deref().unwrap_or("UNKNOWN")
+            enriched_ticker.as_deref().unwrap_or("UNKNOWN")
         );
         
-        // Enhanced duplicate detection - check both exact matches and logical duplicates
+        // 🔧 FIXED: Enhanced duplicate detection that handles ticker enrichment
         let exists: bool = db.query_row(
             "SELECT EXISTS(
                 SELECT 1 FROM portfolio_balances 
                 WHERE device_id = ?1 
+                AND pubkey = ?2 
+                AND caip = ?3 
+                AND COALESCE(address, '') = COALESCE(?4, '') 
+                AND type = ?5 
+                AND balance = ?6
                 AND (
-                    -- Exact duplicate check
-                    (pubkey = ?2 AND caip = ?3 AND COALESCE(address, '') = COALESCE(?4, '') 
-                     AND type = ?5 AND balance = ?6 AND ABS(COALESCE(balance_usd, 0) - COALESCE(?7, 0)) < 0.01)
-                    OR
-                    -- Logical duplicate check (same asset/balance for device regardless of pubkey)
-                    (device_id = ?1 AND caip = ?3 AND COALESCE(address, '') = COALESCE(?4, '') 
-                     AND type = ?5 AND balance = ?6 AND ticker = ?8)
+                    -- Accept small USD differences (price fluctuations)
+                    ABS(COALESCE(balance_usd, 0) - COALESCE(?7, 0)) < 0.50
+                    OR 
+                    -- Same balance, ignore USD (for same pubkey+caip+balance)
+                    (balance = ?6)
                 )
                 LIMIT 1
             )",
@@ -60,7 +84,6 @@ impl CacheManager {
                 balance_type,
                 balance.balance,
                 balance.value_usd.parse::<f64>().unwrap_or(0.0),
-                balance.ticker.as_ref().unwrap_or(&"UNKNOWN".to_string()),
             ],
             |row| row.get(0)
         ).unwrap_or(false);
@@ -79,7 +102,7 @@ impl CacheManager {
             params![
                 device_id,
                 balance.caip,
-                balance.ticker.as_ref().unwrap_or(&"UNKNOWN".to_string()),
+                enriched_ticker.as_ref().unwrap_or(&"UNKNOWN".to_string()),  // 🔧 Use enriched ticker
                 balance.balance,
                 balance.value_usd,  // This is balance_usd in the database
                 balance.price_usd,
@@ -230,11 +253,29 @@ impl CacheManager {
              ORDER BY CAST(balance_usd AS REAL) DESC"
         )?;
         
-        let balances = stmt.query_map([device_id], |row| {
+        let mut balances: Vec<PortfolioBalance> = stmt.query_map([device_id], |row| {
+            let caip: String = row.get(0)?;
+            let stored_ticker: String = row.get(1)?;
+            
+            // 🔧 ENRICH TICKER FROM ASSETS TABLE if stored as "UNKNOWN"
+            let final_ticker = if stored_ticker == "UNKNOWN" {
+                // Look up real ticker from assets table
+                db.query_row(
+                    "SELECT symbol FROM assets WHERE caip = ?1",
+                    [&caip],
+                    |row| row.get::<_, String>(0)
+                ).unwrap_or_else(|_| {
+                    log::debug!("No asset metadata found for CAIP: {}", caip);
+                    stored_ticker.clone()
+                })
+            } else {
+                stored_ticker
+            };
+            
             Ok(PortfolioBalance {
-                caip: row.get(0)?,
+                caip,
                 pubkey: row.get(15).unwrap_or_else(|_| "unknown".to_string()), // Get pubkey from database
-                ticker: Some(row.get(1)?),
+                ticker: Some(final_ticker),
                 balance: row.get(2)?,
                 value_usd: row.get(3)?,  // Maps to balance_usd column
                 price_usd: row.get(4)?,

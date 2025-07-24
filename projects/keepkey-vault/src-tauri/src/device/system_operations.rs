@@ -373,10 +373,16 @@ pub async fn process_system_request_with_cache(
             log::info!("🔧 [DEVICE] GetPublicKey completed in {:.3}s", device_elapsed.as_secs_f64());
             
             // Save to cache
+            // 🔥 For EVM chains, always save as "ethereum" to enable expansion
+            let normalized_coin_name = match actual_coin.to_lowercase().as_str() {
+                "base" | "arbitrum" | "optimism" | "polygon" | "avalanche" | "bsc" => "ethereum",
+                _ => actual_coin,
+            };
+            
             if let Some(cached) = CachedPubkey::from_device_response(
                 device_id,
                 path,
-                actual_coin,
+                normalized_coin_name,
                 script_type.as_deref(),
                 &response,
             ) {
@@ -438,11 +444,17 @@ pub async fn process_system_request_with_cache(
             // Save to cache
             if let DeviceResponse::Address { address, .. } = &response {
                 if !address.is_empty() {
+                    // 🔥 For EVM chains, always save as "ethereum" to enable expansion
+                    let normalized_coin_name = match coin_name.to_lowercase().as_str() {
+                        "base" | "arbitrum" | "optimism" | "polygon" | "avalanche" | "bsc" => "ethereum",
+                        _ => coin_name,
+                    };
+                    
                     let cached = CachedPubkey {
                         id: None,
                         device_id: device_id.to_string(),
                         derivation_path: path.to_string(),
-                        coin_name: coin_name.to_string(),
+                        coin_name: normalized_coin_name.to_string(),
                         script_type: script_type.clone(),
                         xpub: None,
                         address: Some(address.clone()),

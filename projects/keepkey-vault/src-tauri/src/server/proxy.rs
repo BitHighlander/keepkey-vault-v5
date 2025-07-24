@@ -188,7 +188,7 @@ fn determine_target_domain(host: &str, headers: &HeaderMap) -> String {
         }
     }
     
-    // Default routing - spec consistent
+    // Default routing to real KeepKey domain
     "https://keepkey.com".to_string()
 }
 
@@ -196,7 +196,7 @@ fn determine_target_domain(host: &str, headers: &HeaderMap) -> String {
 fn extract_keepkey_subdomain(host: &str) -> Option<String> {
     // Handle localhost with subdomain simulation for development
     if host.starts_with("localhost") || host.starts_with("127.0.0.1") {
-        // Revert to spec-consistent default for local development
+        // For local development, route to vault.keepkey.com (the real live site)
         return Some("vault".to_string());
     }
     
@@ -293,11 +293,14 @@ async fn proxy_keepkey_request(
     
     log::debug!("🔄 Proxying {} {} -> {}", method, path, target_url);
     
-    // Create HTTP client with appropriate settings
+    // Create HTTP client with appropriate settings for connecting to vault.keepkey.com
     let client = reqwest::Client::builder()
         .danger_accept_invalid_certs(false) // Use proper SSL validation for production
-        .timeout(std::time::Duration::from_secs(60)) // Increased timeout for slow responses
+        .timeout(std::time::Duration::from_secs(30)) // Reasonable timeout
+        .connect_timeout(std::time::Duration::from_secs(10)) // DNS/connect timeout
         .user_agent("KeepKey-Vault-Proxy/2.0")
+        .tcp_keepalive(std::time::Duration::from_secs(60))
+        .pool_idle_timeout(std::time::Duration::from_secs(90))
         .build()
         .unwrap();
     
@@ -349,16 +352,26 @@ async fn proxy_keepkey_request(
             convert_response_to_axum(response, target_domain).await
         }
         Err(e) => {
-            // Provide more detailed error information
+            // Provide more detailed error information for vault.keepkey.com connectivity
             let error_msg = if e.is_timeout() {
-                log::warn!("⏰ Proxy request timeout for {} (may be slow server response)", target_url);
-                "Upstream server response timeout - the target server is responding slowly"
+                log::warn!("⏰ Timeout connecting to {} (30s limit)", target_url);
+                "Request timeout - vault.keepkey.com may be slow or unreachable"
             } else if e.is_connect() {
-                log::error!("🔌 Proxy connection failed for {}: {}", target_url, e);
-                "Failed to connect to upstream server"
+                // Check if this is a DNS resolution error specifically
+                let error_str = e.to_string();
+                if error_str.contains("dns error") || error_str.contains("failed to lookup address") {
+                    log::error!("🌐 DNS resolution failed for {}: {}", target_url, e);
+                    "DNS resolution failed - cannot resolve vault.keepkey.com. Check your internet connection and DNS settings"
+                } else {
+                    log::error!("🔌 Connection failed to {}: {}", target_url, e);
+                    "Failed to connect to vault.keepkey.com - the server may be down or unreachable"
+                }
+            } else if e.is_request() {
+                log::error!("📤 Request error to {}: {}", target_url, e);
+                "Request formatting error"
             } else {
-                log::error!("❌ Proxy request failed for {}: {}", target_url, e);
-                "Proxy request failed"
+                log::error!("❌ Unknown proxy error for {}: {}", target_url, e);
+                "Unknown proxy error"
             };
             
             create_error_response(StatusCode::BAD_GATEWAY, &format!("{}: {}", error_msg, e))
