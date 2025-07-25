@@ -8,6 +8,7 @@ use keepkey_rust::friendly_usb::FriendlyUsbDevice;
 
 // Device operation timeout - matches the timeout used in commands.rs
 const DEVICE_OPERATION_TIMEOUT_SECS: u64 = 30;
+const FRONTLOAD_DEVICE_TIMEOUT_MS: u64 = 500; // Optimized timeout for frontload operations
 // Grace period before treating device as truly disconnected
 const DEVICE_DISCONNECTION_GRACE_PERIOD_SECS: u64 = 10;
 
